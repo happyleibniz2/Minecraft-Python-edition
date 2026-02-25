@@ -132,10 +132,31 @@ class Sound:
         # make sure GUI is available under uppercase key as well
         if "gui" in self.SOUNDS and "GUI" not in self.SOUNDS:
             self.SOUNDS["GUI"] = self.SOUNDS["gui"]
-        # copy relevant entries for backwards compatibility
-        for cat in ("step", "dig", "explode"):
+        # copy relevant entries for backwards compatibility.  BLOCKS_SOUND
+        # mirrors the structure expected by BlockSound; explode is special-
+        # cased to be a flat list rather than a dict since the original code
+        # treated it that way.
+        for cat in ("step", "dig"):
             if cat in self.SOUNDS:
                 self.BLOCKS_SOUND[cat] = self.SOUNDS[cat]
-        # also copy pickUp if it ended up in SOUNDS
-        if "pickUp" in self.SOUNDS and "pickUp" not in self.BLOCKS_SOUND:
-            self.BLOCKS_SOUND["pickUp"] = self.SOUNDS["pickUp"]
+        if "explode" in self.SOUNDS:
+            # flatten all groups under explode into a single list
+            sounds = []
+            for lst in self.SOUNDS["explode"].values():
+                sounds.extend(lst)
+            self.BLOCKS_SOUND["explode"] = sounds
+        # pickUp may have been stored at top level
+        if "pickUp" in self.BLOCKS_SOUND:
+            pass
+        elif "pickUp" in self.SOUNDS:
+            # some users might have placed a pickup file in a folder
+            # drop the first element if it's a dict
+            val = self.SOUNDS["pickUp"]
+            if isinstance(val, dict):
+                # flatten
+                sounds = []
+                for lst in val.values():
+                    sounds.extend(lst)
+                self.BLOCKS_SOUND["pickUp"] = sounds[0] if sounds else None
+            else:
+                self.BLOCKS_SOUND["pickUp"] = val
