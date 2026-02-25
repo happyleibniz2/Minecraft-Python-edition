@@ -55,9 +55,16 @@ class BlockSound:
             pass
 
     def playBoomSound(self):
-        bl = len(self.gl.sound.BLOCKS_SOUND["explode"])
-        chnl = self.gl.sound.BLOCKS_SOUND["explode"][randint(0, bl - 1)].play()
-        chnl.set_volume(self.gl.sound.volume)
+        sounds = self.gl.sound.BLOCKS_SOUND.get("explode")
+        if not sounds:
+            return
+        # sounds should be a list due to loader flattening
+        try:
+            idx = randint(0, len(sounds) - 1)
+            chnl = sounds[idx].play()
+            chnl.set_volume(self.gl.sound.volume)
+        except Exception:
+            pass
 
     def playBlockSound(self, blockName):
         blName = self.getBlockSound(blockName)
@@ -68,10 +75,17 @@ class BlockSound:
 
     def playPickUpSound(self):
         if not self.pickUpAlreadyPlayed:
-            chnl = self.gl.sound.BLOCKS_SOUND["pickUp"].play()
+            snd = self.gl.sound.BLOCKS_SOUND.get("pickUp")
+            if snd is None:
+                return
+            # snd might be a single Sound or list
             try:
+                if isinstance(snd, list):
+                    chnl = snd[0].play()
+                else:
+                    chnl = snd.play()
                 chnl.set_volume(self.gl.sound.volume)
-            except:
+            except Exception:
                 pass
             self.pickUpAlreadyPlayed = True
 
