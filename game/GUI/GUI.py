@@ -60,10 +60,15 @@ class GUI:
             self.width = image.width
             self.height = image.height
         def blit(self, x, y):
+            # guard against depth buffer preventing GUI from showing
+            from OpenGL.GL import glPushAttrib, glPopAttrib, glDisable, GL_DEPTH_TEST
+            glPushAttrib(GL_ENABLE_BIT)
+            glDisable(GL_DEPTH_TEST)
             try:
                 self.image.blit(x, y)
             except Exception:
                 pass
+            glPopAttrib()
 
     def _load_gui_textures(self):
         """Recursively load all PNG files under the `gui` directory into
