@@ -113,36 +113,22 @@ class Sound:
                 base_name = ''.join(ch for ch in name if not ch.isdigit())
                 base_name = base_name.rstrip('_')
                 # ensure category exists
+                # always treat each top‑level directory as a dictionary of
+                # prefix‑grouped lists.  This handles "damage", "gui",
+                # "dig", "step", etc.  The only time a plain list is used is
+                # when the category itself is the prefix (e.g. explode1.ogg);
+                # in that case the dict will have a single key equal to the
+                # category name.
                 if category not in self.SOUNDS:
-                    # dig and step need nested dicts
-                    if category in ("dig", "step"):
-                        self.SOUNDS[category] = {}
-                    else:
-                        # default to list
-                        self.SOUNDS[category] = []
-                if category in ("dig", "step"):
-                    bucket = self.SOUNDS[category]
-                    if base_name not in bucket:
-                        bucket[base_name] = []
-                    try:
-                        bucket[base_name].append(pygame.mixer.Sound(path))
-                    except Exception:
-                        pass
-                else:
-                    if isinstance(self.SOUNDS[category], list):
-                        try:
-                            self.SOUNDS[category].append(pygame.mixer.Sound(path))
-                        except Exception:
-                            pass
-                    else:
-                        # some categories may already be dicts (damage)
-                        d = self.SOUNDS[category]
-                        if base_name not in d:
-                            d[base_name] = []
-                        try:
-                            d[base_name].append(pygame.mixer.Sound(path))
-                        except Exception:
-                            pass
+                    self.SOUNDS[category] = {}
+
+                bucket = self.SOUNDS[category]
+                if base_name not in bucket:
+                    bucket[base_name] = []
+                try:
+                    bucket[base_name].append(pygame.mixer.Sound(path))
+                except Exception:
+                    pass
         # make sure GUI is available under uppercase key as well
         if "gui" in self.SOUNDS and "GUI" not in self.SOUNDS:
             self.SOUNDS["GUI"] = self.SOUNDS["gui"]
