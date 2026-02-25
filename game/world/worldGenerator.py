@@ -1,4 +1,5 @@
 import random
+import threading
 from collections import deque
 
 from game.world.Biomes import Biomes, getBiomeByTemp
@@ -23,27 +24,54 @@ class worldGenerator:
         self.start = len(self.queue)
         self.blocks = {}
         self.loading = deque()
-        
+        self._lock = threading.Lock()
+        self.generating = False
+        self._worker_thread = None
+
+    def start(self):
+        """Begin asynchronous chunk generation if not already running."""
+        if self.generating:
+            return
+        self.generating = True
+        self._worker_thread = threading.Thread(target=self._generate_worker, daemon=True)
+        self._worker_thread.start()
+
+    def _generate_worker(self):
+        # Worker runs in background thread, generates chunk data and appends to loading
+        while self.queue:
+            xx, zz = self.queue.popleft()
+            self.gen(xx, zz)
+        # when queue is empty, generation done
+        self.generating = False
 
     def add(self, p, t):
-        if p in self.blocks:
-            return
-        self.blocks[p] = t
-        self.loading.append((p, t))
-        self.gl.cubes.add(p, t)
+        # store block data; actual cube creation happens on the main thread
+        with self._lock:
+            if p in self.blocks:
+                return
+            self.blocks[p] = t
+            self.loading.append((p, t))
+        # note: do not call gl.cubes.add() here when running in a background thread
 
     def genChunk(self, player):
+        # kept for backwards compatibility; ensure thread is running
         if player.hp == -1:
             player.hp = 20
+        if not self.generating:
+            self.start()
+        # generation work is performed in background thread; flush any finished cubes
+        self.process_loading()
 
-        if self.queue:
-            self.gen(*self.queue.popleft())
-
-            while self.loading:
-                p, t = self.loading.popleft()
-                self.gl.cubes.updateCube(self.gl.cubes.cubes[p])
+    def process_loading(self):
+        # must be called from main thread to update OpenGL structures
+        while self.loading:
+            p, t = self.loading.popleft()
+            # create cube and update its visual representation
+            self.gl.cubes.add(p, t)
+            self.gl.cubes.updateCube(self.gl.cubes.cubes[p])
 
     def gen(self, xx, zz):
+        # this runs in the worker thread, so avoid touching OpenGL
         sy = CHUNK_SIZE[1]
         oldY = 0
         self.genOre(-2.0,59.75,-2.0)
@@ -92,17 +120,31 @@ class worldGenerator:
         r1 = random.randint(-1, 2)
         r2 = random.randint(0, 2)
         ore = self.getOreByY(y)
-
         for xi in range(r1, r2):
             for yi in range(r1):
                 for zi in range(r2):
                     self.add((x + xi, yi + y, zi + z), ore)
 
+    # background thread management ------------------------------------------------
+    def _generate_worker(self):
+        # keep consuming queue until exhausted
+        while self.queue:
+            xx, zz = self.queue.popleft()
+            self.gen(xx, zz)
+        self.generating = False
+
+    def start(self):
+        if not self.generating:
+            self.generating = True
+            self._worker_thread = threading.Thread(target=self._generate_worker, daemon=True)
+            self._worker_thread.start()
+
     def getOreByY(self, y):
         if y < 20:
             _diamond = random.randint(0, 150)
             if _diamond > 54:
-                print("diamond generated at ",_diamond)
+                # debug: diamond spawn, comment out to reduce output
+                # print("diamond generated at ",_diamond)
                 return "diamond_ore"
             if random.randint(0, 1000) > 54:
                 return "emerald_ore"

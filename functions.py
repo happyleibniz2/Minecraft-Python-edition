@@ -1,8 +1,9 @@
 import os
 import time
 from random import randint
-import pyglet
+import pygame
 from OpenGL.GL import *
+import pyglet
 from settings import *
 
 
@@ -20,7 +21,11 @@ def load_textures(self):
                 if ".png" not in file:
                     continue
 
-                image = pyglet.image.load(d + '/' + file)
+                try:
+                    image = pyglet.image.load(d + '/' + file)
+                except Exception as e:
+                    print(f"Failed to load texture {d}/{file}: {e}")
+                    continue
                 if image.width == 1024 and image.height == 1024 or image.width == 512 and image.height == 512 or image.width == 256 and image.height == 256 or image.width == 128 and image.height == 128:
                     # Adjust loading method for 1024x textures
                     texture = image.get_texture()  # Example adjustment for higher resolution
@@ -98,6 +103,10 @@ def drawInfoLabel(gl, text, xx=0, yy=0, style=None, size=15, anchor_x='left', an
                   label_color=(255, 255, 255), shadow_color=(56, 56, 56), scale=0, shadow=True):
     if style is None:
         style = []
+    
+    # Use the mainFont from settings
+    font = mainFont if 'mainFont' in globals() else pygame.font.SysFont('arial', size)
+    
     y = -21
     ms = size / 6
     for i in text.split("\n"):
@@ -107,37 +116,66 @@ def drawInfoLabel(gl, text, xx=0, yy=0, style=None, size=15, anchor_x='left', an
             ix = xx + ms
         if yy:
             iy = yy - ms
-        shadow_lbl = pyglet.text.Label(i,
-                                       font_name='Minecraft Rus',
-                                       color=(shadow_color[0], shadow_color[1], shadow_color[2], round(opacity * 255)),
-                                       font_size=size,
-                                       x=ix, y=iy,
-                                       anchor_x=anchor_x,
-                                       anchor_y=anchor_y)
-        lbl = pyglet.text.Label(i,
-                                font_name='Minecraft Rus',
-                                color=(label_color[0], label_color[1], label_color[2], round(opacity * 255)),
-                                font_size=size,
-                                x=ix - ms, y=iy + ms,
-                                anchor_x=anchor_x,
-                                anchor_y=anchor_y)
-        if not style:
-            lbl.set_style("background_color", (69, 69, 69, 100))
-        else:
-            for st in style:
-                lbl.set_style(st[0], st[1])
-                shadow_lbl.set_style(st[0], st[1])
-        if rotate:
-            glRotatef(rotate, 0.0, 0.0, 1.0)
-        if scale:
-            glScalef(scale, scale, 0)
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
+            
+        # Create text surfaces with pygame
+        text_surface = font.render(i, True, label_color)
+        shadow_surface = font.render(i, True, shadow_color)
+        
+        # Apply opacity
+        if opacity < 1:
+            text_surface.set_alpha(round(opacity * 255))
+            shadow_surface.set_alpha(round(opacity * 255))
+        
+        # Get position based on anchors
+        text_rect = text_surface.get_rect()
+        shadow_rect = shadow_surface.get_rect()
+        
+        if anchor_x == 'center':
+            text_rect.centerx = ix
+            shadow_rect.centerx = ix - ms
+        elif anchor_x == 'right':
+            text_rect.right = ix
+            shadow_rect.right = ix - ms
+        else:  # left
+            text_rect.left = ix
+            shadow_rect.left = ix - ms
+            
+        if anchor_y == 'center':
+            text_rect.centery = iy
+            shadow_rect.centery = iy + ms
+        elif anchor_y == 'top':
+            text_rect.top = iy
+            shadow_rect.top = iy + ms
+        else:  # baseline
+            text_rect.bottom = iy
+            shadow_rect.bottom = iy + ms
+        
+        # Draw shadow first (if enabled)
         if shadow:
-            shadow_lbl.draw()
-        lbl.draw()
-        if rotate:
-            glRotatef(-rotate, 0.0, 0.0, 1.0)
+            # Convert pygame surface to OpenGL texture and draw
+            shadow_data = pygame.image.tostring(shadow_surface, 'RGBA', True)
+            glPushAttrib(GL_ENABLE_BIT)
+            glDisable(GL_DEPTH_TEST)
+            glEnable(GL_BLEND)
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+            
+            glRasterPos2i(int(shadow_rect.x), int(shadow_rect.y))
+            glDrawPixels(shadow_surface.get_width(), shadow_surface.get_height(), 
+                        GL_RGBA, GL_UNSIGNED_BYTE, shadow_data)
+            glPopAttrib()
+        
+        # Draw main text
+        text_data = pygame.image.tostring(text_surface, 'RGBA', True)
+        glPushAttrib(GL_ENABLE_BIT)
+        glDisable(GL_DEPTH_TEST)
+        glEnable(GL_BLEND)
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+        
+        glRasterPos2i(int(text_rect.x), int(text_rect.y))
+        glDrawPixels(text_surface.get_width(), text_surface.get_height(), 
+                    GL_RGBA, GL_UNSIGNED_BYTE, text_data)
+        glPopAttrib()
+        
         y -= 21
 
 

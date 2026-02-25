@@ -14,5 +14,7 @@
     "backgame" : "回到游戏中",
     "gui.qtt" : "返回主界面",
     "respawn" : "重生",
-    "quit.mainmenu" : "退出主菜单中..."
+    "death.respawn" : "重生",
+    "quit.mainmenu" : "退出主菜单中...",
+    "gui.done" : "完成"
 }

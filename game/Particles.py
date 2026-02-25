@@ -1,4 +1,5 @@
 from random import choice
+import pyglet
 from OpenGL.GL import *
 from functions import *
 

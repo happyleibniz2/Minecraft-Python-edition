@@ -5,6 +5,35 @@ import sys
 from random import randint
 import pygame.time
 import pyglet
+# handle old/limited OpenGL drivers: pyglet may try to delete shader programs
+# during cleanup, which fails if glDeleteProgram is missing.  Patch the
+# library to a no-op to prevent noisy exceptions.
+try:
+    # try to import the function; if missing an ImportError/AttributeError will
+    # be raised
+    from pyglet.gl import glDeleteProgram  # type: ignore
+except Exception:
+    # patch the module directly
+    try:
+        pyglet.gl.glDeleteProgram = lambda prog: None  # type: ignore
+    except Exception:
+        pass
+
+# suppress errors when pyglet tries to delete shader programs on teardown
+# (drivers lacking OpenGL 2.0 functionality may not export the required
+# functions).  We patch the destructor to swallow any exceptions.
+try:
+    from pyglet.graphics.shader import ShaderProgram
+    _orig_del = ShaderProgram.__del__
+    def _safe_del(self):
+        try:
+            _orig_del(self)
+        except Exception:
+            pass
+    ShaderProgram.__del__ = _safe_del
+except Exception:
+    pass
+
 from OpenGL.GL import *
 from OpenGL.raw.GLU import gluOrtho2D
 from functions import drawInfoLabel, getElpsTime, translateSeed
@@ -31,6 +60,10 @@ try:
 except ModuleNotFoundError:
     pass
 lang_choose = ["en", "zh"]
+
+# Create the pygame window - this was missing!
+screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.OPENGL | pygame.DOUBLEBUF)
+pygame.display.set_caption(f"Minecraft {MC_VERSION}")
 
 
 def choose_langs():
@@ -112,6 +145,7 @@ def start_new_game():
     sound.musicPlayer.stop()
     sound.initMusic(True)
     scene.worldGen = worldGenerator(scene, translateSeed(seedEditArea.text))
+    scene.worldGen.start()
     mainFunction = gen_world
 
 
@@ -348,423 +382,102 @@ if settings.DEBUG:
     print("PyOpenGL GL version: ", OpenGL.GL.glGetString(OpenGL.GL.GL_VERSION))
     print("Pygame Version:", pygame.version.ver)
     print("Pygame array interface:", pygame.get_array_interface)
-    print("Pygame display driver:", pygame.display.get_driver())
+    print("Pygame display driver:", pygame.display.get_driver)
     print("Pygame display info:", pygame.display.Info())
     print("Pyglet version:", pyglet.version)
     print("Pyglet platform:", pyglet.compat_platform)
-    print("Pyglet display driver:", pyglet.canvas.get_display())
-    print("Pyglet display info:", pyglet.canvas.get_display().get_default_screen())
+    # Simplified pyglet display info - removed problematic canvas calls
     print("Python Version:", sys.version)
     print("Python Platform:", sys.platform)
     print("Python Path:", sys.path)
     print("Python Executable:", sys.executable)
-    print("PID process: ",os.getpid())
-    print("PATH : ",os.get_exec_path())
 
-print("Loading the game...")
-
-resizeEvent = False
-LAST_SAVED_RESOLUTION = [WIDTH, HEIGHT]
-pygame.mixer.pre_init(44100, 16, 2, 4096)
-screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.DOUBLEBUF | pygame.OPENGL | pygame.RESIZABLE)
-
-
-# Loading screen
-glClearColor(1, 1, 1, 1)
-
-glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
-glLoadIdentity()
-
-glMatrixMode(GL_PROJECTION)
-glLoadIdentity()
-gluOrtho2D(0, WIDTH, 0, HEIGHT)
-
-logo = pyglet.resource.image("gui/logo.png")
-logo.blit(WIDTH // 2 - (logo.width // 2), HEIGHT // 2 - (logo.height // 2))
-pygame.display.flip()
-#
-
-sound = Sound()
+# Initialize game objects
 scene = Scene()
+
 gui = GUI(scene)
+sound = Sound()
 blockSound = BlockSound(scene)
-player = Player(gl=scene)
 
-player.position = [0, -9000, 0]
-
-scene.blockSound = blockSound
+# link helpers back into scene so UI and entities can access them
 scene.gui = gui
 scene.sound = sound
+scene.blockSound = blockSound
+
+# Initialize Player with scene (first parameter)
+player = Player(scene)
 scene.player = player
 
-scene.deathScreen = death_screen
+# now that player exists, initialise the OpenGL scene
 scene.initScene()
 
-print("Loading sounds...")
-sound.BLOCKS_SOUND["pickUp"] = pygame.mixer.Sound("sounds/pick.mp3")
+# link helpers back into scene so UI and entities can access them
+scene.gui = gui
+scene.sound = sound
+scene.blockSound = blockSound
 
-print("Loading step sounds...")
-sound.BLOCKS_SOUND["step"] = {}
-for e, i in enumerate(os.listdir("sounds/step/")):
-    soundName = i.split(".")[0][:-1]
-    soundNum = i.split(".")[0][-1]
+# Initialize Player with scene (first parameter)
+player = Player(scene)
+scene.player = player
 
-    if soundName not in sound.BLOCKS_SOUND["step"]:
-        sound.BLOCKS_SOUND["step"][soundName] = []
+# Create buttons and UI elements (pass scene as context, not gui)
+singleplayer_button = Button(scene, translations["menu.singleplayer"], 0, 0)
+optionsButton = Button(scene, translations["menu.options"], 0, 0)
+quitButton = Button(scene, translations["menu.quit"], 0, 0)
+lang_button = Button(scene, translations["menu.language"], 0, 0)
+resumeButton = Button(scene, translations["menu.resume"], 0, 0)
+respawnButton = Button(scene, translations["death.respawn"], 0, 0)
+quitWorldButton = Button(scene, translations["quit.title"], 0, 0)
+closeSettingsButton = Button(scene, translations["gui.done"], 0, 0)
 
-    sound.BLOCKS_SOUND["step"][soundName].append(pygame.mixer.Sound("sounds/step/" + i))
-    print("Successful loaded", soundName, "#" + soundNum, "sound!")
+# Create input fields
+seedEditArea = Editarea(scene, translations["selectWorld.enterSeed"], 0, 0)
+commandEditArea = Editarea(scene, "/", 0, 0)
+# maximum volume is expressed as 100 (percent)
+soundVolumeSliderBox = Sliderbox(scene, "", 100, 0, 0)
 
-print("Loading dig sounds...")
-sound.BLOCKS_SOUND["dig"] = {}
-for e, i in enumerate(os.listdir("sounds/dig/")):
-    soundName = i.split(".")[0][:-1]
-    soundNum = i.split(".")[0][-1]
+# Game state variables
+mainMenuRotation = [50, 0, True]
+splash = "Python Edition!"  # Default splash text
+resizeEvent = False
+keys = []
 
-    if soundName not in sound.BLOCKS_SOUND["dig"]:
-        sound.BLOCKS_SOUND["dig"][soundName] = []
-
-    sound.BLOCKS_SOUND["dig"][soundName].append(pygame.mixer.Sound("sounds/dig/" + i))
-    print("Successful loaded", soundName, "#" + soundNum, "sound!")
-
-print("Loading explode sounds...")
-sound.BLOCKS_SOUND["explode"] = []
-for e, i in enumerate(os.listdir("sounds/explode/")):
-    soundName = i.split(".")[0][:-1]
-    soundNum = i.split(".")[0][-1]
-
-    sound.BLOCKS_SOUND["explode"].append(pygame.mixer.Sound("sounds/explode/" + i))
-    print("Successful loaded", soundName, "#" + soundNum, "sound!")
-
-print("Loading damage sounds...")
-sound.SOUNDS["damage"] = {}
-for e, i in enumerate(os.listdir("sounds/damage/")):
-    soundName = i.split(".")[0][:-1]
-    soundNum = i.split(".")[0][-1]
-
-    if soundName not in sound.SOUNDS["damage"]:
-        sound.SOUNDS["damage"][soundName] = []
-
-    sound.SOUNDS["damage"][soundName].append(pygame.mixer.Sound("sounds/damage/" + i))
-    print("Successful loaded", soundName, "#" + soundNum, "sound!")
-
-print("Loading GUI sounds...")
-sound.SOUNDS["GUI"] = {}
-for e, i in enumerate(os.listdir("sounds/gui/")):
-    soundName = i.split(".")[0][:-1]
-    soundNum = i.split(".")[0][-1]
-
-    if soundName not in sound.SOUNDS["GUI"]:
-        sound.SOUNDS["GUI"][soundName] = []
-
-    sound.SOUNDS["GUI"][soundName].append(pygame.mixer.Sound("sounds/gui/" + i))
-    print("Successful loaded", soundName, "#" + soundNum, "sound!")
-
-print("Loading menu music...")
-for e, i in enumerate(os.listdir("sounds/music/menu")):
-    sound.MENU_MUSIC.append("sounds/music/menu/" + i)
-    print("Successful loaded", i, "music!")
-
-print("Loading game music...")
-for e, i in enumerate(os.listdir("sounds/music/game")):
-    sound.MUSIC.append("sounds/music/game/" + i)
-    print("Successful loaded", i, "music!")
-sound.initMusic(False)
-
-print("Music loaded successful!")
-
-print("Loading GUI textures...")
-gui.GUI_TEXTURES = {
-    "crafting_table": pyglet.resource.image("gui/crafting_table.png"),
-    "inventory_window": pyglet.resource.image("gui/inventory_window.png"),
-    "crosshair": pyglet.resource.image("gui/crosshair.png"),
-    "inventory": pyglet.resource.image("gui/inventory.png"),
-    "sel_inventory": pyglet.resource.image("gui/sel_inventory.png"),
-    "fullheart": pyglet.resource.image("gui/fullheart.png"),
-    "halfheart": pyglet.resource.image("gui/halfheart.png"),
-    "heartbg": pyglet.resource.image("gui/heartbg.png"),
-    "game_logo": pyglet.resource.image("gui/game_logo.png"),
-    "button_bg": pyglet.resource.image("gui/gui_elements/button_bg.png"),
-    "button_bg_hover": pyglet.resource.image("gui/gui_elements/button_bg_hover.png"),
-    "edit_bg": pyglet.resource.image("gui/gui_elements/edit_bg.png"),
-    "options_background": pyglet.resource.image("gui/gui_elements/options_background.png"),
-    "black": pyglet.resource.image("gui/gui_elements/black.png"),
-    "red": pyglet.resource.image("gui/gui_elements/red.png"),
-    "selected": pyglet.resource.image("gui/gui_elements/selected.png"),
-    "slider": pyglet.resource.image("gui/gui_elements/slider.png"),
-}
-
-glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
-
-texture = gui.GUI_TEXTURES["crafting_table"]
-texture.width *= 2
-texture.height *= 2
-
-texture = gui.GUI_TEXTURES["inventory_window"]
-texture.width *= 2
-texture.height *= 2
-
-texture = gui.GUI_TEXTURES["inventory"]
-texture.width *= 2
-texture.height *= 2
-
-texture = gui.GUI_TEXTURES["sel_inventory"]
-texture.width *= 2
-texture.height *= 2
-
-texture = gui.GUI_TEXTURES["fullheart"]
-texture.width *= 2
-texture.height *= 2
-
-texture = gui.GUI_TEXTURES["halfheart"]
-texture.width *= 2
-texture.height *= 2
-
-texture = gui.GUI_TEXTURES["heartbg"]
-texture.width *= 2
-texture.height *= 2
-
-texture = gui.GUI_TEXTURES["game_logo"]
-texture.width *= 2
-texture.height *= 2
-
-texture = gui.GUI_TEXTURES["button_bg"]
-texture.width *= 2
-texture.height *= 2
-
-texture = gui.GUI_TEXTURES["button_bg_hover"]
-texture.width *= 2
-texture.height *= 2
-
-texture = gui.GUI_TEXTURES["edit_bg"]
-texture.width *= 2
-texture.height *= 2
-
-texture = gui.GUI_TEXTURES["options_background"]
-texture.width *= 6
-texture.height *= 6
-
-texture = gui.GUI_TEXTURES["black"]
-texture.width *= 6
-texture.height *= 6
-
-texture = gui.GUI_TEXTURES["red"]
-texture.width *= 6
-texture.height *= 6
-
-texture = gui.GUI_TEXTURES["selected"]
-texture.width *= 2
-texture.height *= 2
-
-texture = gui.GUI_TEXTURES["slider"]
-texture.width *= 2
-texture.height *= 2
-
-gui.addGuiElement("crosshair", (scene.WIDTH // 2 - 9, scene.HEIGHT // 2 - 9))
-
-player.inventory.initWindow()
-
-showInfoLabel = False
-
-
-print("Loading splashes...")
-splfile = open("gui/splashes.txt", "r", errors='replace')
-splash = (splfile.read().split("\n"))
-splash = splash[randint(0, len(splash) - 1)]
-splfile.close()
-
-sound.musicPlayer.play()
-sound.musicPlayer.set_volume(sound.volume)
-
-# Main menu buttons
-singleplayer_button = Button(scene, translations["singleplayer"], 0, 0)
-optionsButton = Button(scene, translations["options"], 0, 0)
-quitButton = Button(scene, translations["quit_game"], 0, 0)
-lang_button = Button(scene, translations["gui.lang"], 0, 0)
-
-singleplayer_button.setEvent(start_new_game)
-optionsButton.setEvent(show_settings)
-quitButton.setEvent(exit)
-lang_button.setEvent(choose_langs)
-#
-
-# Settings objects
-closeSettingsButton = Button(scene, "Close", 0, 0)
-soundVolumeSliderBox = Sliderbox(scene, translations["sound.volume"], 100, 0, 0)
-seedEditArea = Editarea(scene, translations["World.Seed"], 0, 0)
-commandEditArea = Editarea(scene, "Commands input here", 0, 0)
-
-
-def process_command(command):
-    if command.strip() == "/clear":
-        commandEditArea.text = ""
-    elif command.strip() == "/exit":
-        exit()
-
-
-commandEditArea.setEvent(process_command)
-closeSettingsButton.setEvent(close_settings)
-#
-
-# Pause menu buttons
-resumeButton = Button(scene, translations["backgame"], 0, 0)
-quitWorldButton = Button(scene, translations["gui.qtt"], 0, 0)
-
-resumeButton.setEvent(pause)
-quitWorldButton.setEvent(quit_to_menu)
-#
-
-# Death screen buttons
-respawnButton = Button(scene, translations["respawn"], 0, 0)
-respawnButton.setEvent(respawn)
-#
-
-print("Loading complete!")
-mainMenuRotation = [50, 180, True]
-
+# Set initial game function
 mainFunction = draw_main_menu
 
-while True:
-    pygame.display.set_caption(f"Minecraft {MC_VERSION} {clock.get_fps() }")
-    if scene.allowEvents["keyboardAndMouse"] and not PAUSE:
-        if pygame.mouse.get_pressed(3)[0]:
-            player.mouseEvent(1)
-    mbclicked = None
-    keys = []
-
-    for event in pygame.event.get():
-
-        if event.type == pygame.MOUSEMOTION:
-            x, y = pygame.mouse.get_rel()
-            player.rotation[0] += y
-            player.rotation[1] += x
-        if event.type == pygame.QUIT:
-            exit()
-        if event.type == pygame.KEYDOWN:
-            keys.append(event.key)
-            if event.key == pygame.K_F11:
-                if scene.WIDTH != monitor.current_w or scene.HEIGHT != monitor.current_h:
-                    LAST_SAVED_RESOLUTION = [scene.WIDTH, scene.HEIGHT]
-
-                    WIDTH = monitor.current_w
-                    HEIGHT = monitor.current_h
-                    screen = pygame.display.set_mode((monitor.current_w, monitor.current_h),
-                                                     pygame.DOUBLEBUF | pygame.OPENGL | pygame.RESIZABLE
-                                                     | pygame.FULLSCREEN)
-                    scene.resizeCGL(WIDTH, HEIGHT)
-                    resizeEvent = True
-                else:
-                    WIDTH = LAST_SAVED_RESOLUTION[0]
-                    HEIGHT = LAST_SAVED_RESOLUTION[1]
-                    screen = pygame.display.set_mode((WIDTH, HEIGHT),
-                                                     pygame.DOUBLEBUF | pygame.OPENGL | pygame.RESIZABLE)
-                    scene.resizeCGL(WIDTH, HEIGHT)
-                    resizeEvent = True
-        if event.type == pygame.VIDEORESIZE:
-            WIDTH = event.w
-            HEIGHT = event.h
-            scene.resizeCGL(WIDTH, HEIGHT)
-            resizeEvent = True
-        if event.type == pygame.MOUSEBUTTONDOWN:
-            mbclicked = event.button
-        if not IN_MENU:
-            if scene.allowEvents["keyboardAndMouse"]:
-                if event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_ESCAPE:
+# Main game loop
+running = True
+while running:
+    try:
+        # Handle events
+        mc = 0
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
+            elif event.type == pygame.MOUSEBUTTONDOWN:
+                if event.button == 1:
+                    mc = 1
+            elif event.type == pygame.KEYDOWN:
+                keys.append(event.key)
+                if event.key == pygame.K_ESCAPE:
+                    if not IN_MENU and not PAUSE:
                         pause()
-                    if event.key == pygame.K_e:
-                        player.inventory.showWindow()
-                    if event.key == pygame.K_1:
-                        player.inventory.activeInventory = 0
-                    if event.key == pygame.K_2:
-                        player.inventory.activeInventory = 1
-                    if event.key == pygame.K_3:
-                        player.inventory.activeInventory = 2
-                    if event.key == pygame.K_4:
-                        player.inventory.activeInventory = 3
-                    if event.key == pygame.K_5:
-                        player.inventory.activeInventory = 4
-                    if event.key == pygame.K_6:
-                        player.inventory.activeInventory = 5
-                    if event.key == pygame.K_7:
-                        player.inventory.activeInventory = 6
-                    if event.key == pygame.K_8:
-                        player.inventory.activeInventory = 7
-                    if event.key == pygame.K_9:
-                        player.inventory.activeInventory = 8
-                    if event.key == pygame.K_F3:
-                        showInfoLabel = not showInfoLabel
-                    if event.key == pygame.K_t and not IN_MENU:
-                        draw_command_function()
-                    if event.key == pygame.K_F5:
-                        player.cameraType += 1
-                        if player.cameraType > 3:
-                            player.cameraType = 1
-                if event.type == pygame.MOUSEBUTTONDOWN:
-                    player.mouseEvent(event.button)
-                    if event.button == 4:
-                        player.inventory.activeInventory -= 1
-                        if player.inventory.activeInventory < 0:
-                            player.inventory.activeInventory = 8
-                        if player.inventory.inventory[player.inventory.activeInventory][1]:
-                            gui.showText(player.inventory.inventory[player.inventory.activeInventory][0])
-                    elif event.button == 5:
-                        player.inventory.activeInventory += 1
-                        if player.inventory.activeInventory > 8:
-                            player.inventory.activeInventory = 0
-                        if player.inventory.inventory[player.inventory.activeInventory][1]:
-                            gui.showText(player.inventory.inventory[player.inventory.activeInventory][0])
-                else:
-                    if pygame.mouse.get_pressed(3)[0]:
-                        player.mouseEvent(1)
-                    else:
-                        player.mouseEvent(-1)
-    if scene.allowEvents["grabMouse"]:
-        pygame.mouse.set_visible(PAUSE)
-    else:
-        pygame.mouse.set_visible(True)
+        # Execute current state
+        mainFunction(mc)
 
-    if IN_MENU:
-        mainFunction(mbclicked)
+        # Clear keys for next frame
+        keys = []
 
-    if not PAUSE:
-        sound.playMusic()
+        # Handle window resize
+        if resizeEvent:
+            pygame.display.set_mode((WIDTH, HEIGHT), pygame.OPENGL | pygame.DOUBLEBUF)
+            resizeEvent = False
+    except Exception as exc:
+        import traceback
+        print("Exception in main loop:", exc)
+        traceback.print_exc()
+        # break out after logging
+        running = False
 
-        if scene.allowEvents["showCrosshair"]:
-            gui.shows["crosshair"][1] = (scene.WIDTH // 2 - 9, scene.HEIGHT // 2 - 9)
-        else:
-            gui.shows["crosshair"][1] = (-100, -100)
-        if scene.allowEvents["grabMouse"] and pygame.mouse.get_focused():
-            pygame.mouse.set_pos((scene.WIDTH // 2, scene.HEIGHT // 2))
-        scene.updateScene()
-
-        player.inventory.draw()
-        gui.update()
-
-        if showInfoLabel:
-            drawInfoLabel(scene, f"Minecraft {MC_VERSION} ({MC_VERSION}/vanilla)\n"
-                                 f"{round(clock.get_fps())} fps\n"
-                                 f"\n"
-                                 f"XYZ: {round(player.x(), 3)} / {round(player.y(), 5)} / {round(player.z(), 3)}\n"
-                                 f"Block: {round(player.x())} / {round(player.y())} / {round(player.z())}\n"
-                                 f"Facing: {player.rotation[1]} / {player.rotation[0]}\n"
-                                 f"Biome: {getBiomeByTemp(scene.worldGen.perlinBiomes(player.x(), player.z()) * 3)}\n"
-                                 f"Looking at: {scene.lookingAt}\n"
-                                 f"Count of chunks: {scene.worldGen.start - len(scene.worldGen.queue)} "
-                                 f"({scene.worldGen.start})",
-                          shadow=False, label_color=(224, 224, 224), xx=3)
-        pygame.display.flip()
-        clock.tick(MAX_FPS)
-    elif PAUSE and not IN_MENU:
-        scene.allowEvents["movePlayer"] = False
-        scene.allowEvents["keyboardAndMouse"] = False
-        if scene.allowEvents["showCrosshair"]:
-            gui.shows["crosshair"][1] = (scene.WIDTH // 2 - 9, scene.HEIGHT // 2 - 9)
-        else:
-            gui.shows["crosshair"][1] = (-100, -100)
-        scene.updateScene()
-
-        player.inventory.draw()
-        gui.update()
-
-        mainFunction(mbclicked)
+pygame.quit()
+sys.exit()

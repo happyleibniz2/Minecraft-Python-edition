@@ -62,8 +62,13 @@ class Editarea:
             if self.curFade[0] < 0:
                 self.curFade[1] = False
                 self.curFade[0] = 0
-            text = pyglet.text.Label(self.text, font_name='Minecraft Rus')
-            drawInfoLabel(self.gl, "_", xx=self.x + 12 + text.content_width, yy=self.gl.HEIGHT - self.y - 25,
+            
+            # Calculate cursor position based on text width
+            # Using pygame font metrics instead of pyglet
+            font = mainFont if 'mainFont' in globals() else pygame.font.SysFont('arial', 12)
+            text_width = font.size(self.text)[0] if self.text else 0
+            
+            drawInfoLabel(self.gl, "_", xx=self.x + 12 + text_width, yy=self.gl.HEIGHT - self.y - 25,
                           style=[('', '')], size=12, opacity=self.curFade[0])
             
     def setEvent(self, event):  # Add this method

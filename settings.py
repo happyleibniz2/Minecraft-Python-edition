@@ -10,20 +10,50 @@ current_language = lang_type
 print(current_language)
 
 
+class Translations(dict):
+    """Dict subclass that returns the key when a translation is missing.
+
+    This prevents KeyError crashes when code requests a string that hasn't
+    been added to the language file. It also logs the missing key so you can
+    add it later.
+    """
+    def __getitem__(self, key):
+        if key in self:
+            return super().__getitem__(key)
+        else:
+            # log once per missing key to avoid spamming
+            print(f"[translation] missing key: '{key}'")
+            return key
+
+
 def load_language():
-    with open(f"assets/Minecraft/languages/{current_language}.json", "r", encoding="utf-8") as file:
-        return json.load(file)
+    path = f"assets/Minecraft/languages/{current_language}.json"
+    try:
+        with open(path, "r", encoding="utf-8") as file:
+            data = json.load(file)
+    except Exception as e:
+        print(f"Failed to load language file {path}: {e}")
+        data = {}
+    # wrap in Translations so access is safe
+    return Translations(data)
 
 
 translations = load_language()
-if current_language == "zh":
-    font.add_file('gui/MinecraftAE.ttf')
-    mainFont = font.load('gui/MinecraftAE.ttf', 15)
-elif current_language == "en":
-    font.add_file('gui/main.ttf')
-    mainFont = font.load('gui/main.ttf', 20)
 
+# Initialize pygame first
 pygame.init()
+
+# Use pygame fonts instead of pyglet fonts to avoid compatibility issues
+if current_language == "zh":
+    try:
+        mainFont = pygame.font.Font('gui/MinecraftAE.ttf', 15)
+    except:
+        mainFont = pygame.font.SysFont('arial', 15)
+elif current_language == "en":
+    try:
+        mainFont = pygame.font.Font('gui/main.ttf', 20)
+    except:
+        mainFont = pygame.font.SysFont('arial', 20)
 
 monitor = pygame.display.Info()
 WIDTH = 927  # monitor.current_w

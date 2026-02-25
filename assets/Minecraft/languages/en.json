@@ -1,7 +1,12 @@
 {
     "singleplayer": "Singleplayer",
+    "menu.singleplayer": "Singleplayer",
     "options": "Options",
+    "menu.options": "Options",
     "quit_game": "Quit game",
+    "menu.quit": "Quit Game",
+    "menu.language": "Language",
+    "menu.resume": "Resume Game",
     "player dead": "You Died!",
     "sound.volume" : "Sound Volume",
     "World.Seed" : "World Seed",
@@ -14,5 +19,8 @@
     "backgame" : "Back to Game",
     "gui.qtt" : "Quit To Title",
     "respawn" : "Respawn",
-    "quit.mainmenu" : "Quitting to main menu..."
+    "quit.mainmenu" : "Quitting to main menu...",
+    "death.respawn" : "Respawn",
+    "selectWorld.enterSeed" : "Enter world seed:",
+    "gui.done" : "Done"
 }

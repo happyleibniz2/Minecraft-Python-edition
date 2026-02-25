@@ -1,8 +1,9 @@
 import math
 from random import randint
 
-import pyglet
 from pyglet.gl import GL_QUADS
+# text rendering uses pygame via drawInfoLabel for compatibility
+from functions import drawInfoLabel
 
 from game.GUI.ModalWindow import ModalWindow
 from game.crafting import getCraftingItem
@@ -13,7 +14,7 @@ class Inventory:
     def __init__(self, glClass):
         self.gl = glClass
         self.inventory = {}
-        self.blocksLabel = {}
+        # blocksLabel removed; use drawInfoLabel instead
         self.activeInventory = 0
         self.heartAnimation = []
         self.draggingItem = []
@@ -25,11 +26,7 @@ class Inventory:
             self.heartAnimation.append([0, '-' if old else '+', randint(3, 8) / 10])
         for i in range(9 * 5 + 1):
             self.inventory[i] = ["sand", 0]
-            self.blocksLabel[i] = pyglet.text.Label("0",
-                                                    font_name='Minecraft Rus',
-                                                    color=(255, 255, 255, 255),
-                                                    font_size=10,
-                                                    x=self.gl.WIDTH // 2, y=60)
+            # labels will be drawn dynamically in draw(); no need to pre-create
 
     def initWindow(self):
         self.window = ModalWindow(self.gl)
@@ -67,7 +64,21 @@ class Inventory:
         self.window.show()
 
     def windowClickEvent(self, button, cell):
+        # left click
         if button[0]:
+            # if clicking on crafted result slot
+            if cell == 41 and self.inventory[cell][1] > 0:
+                # add result to inventory and consume ingredients
+                self.addBlock(self.inventory[cell][0])
+                for idx in (37, 38, 39, 40):
+                    if self.inventory[idx][1] > 0:
+                        self.inventory[idx][1] -= 1
+                        if self.inventory[idx][1] == 0:
+                            self.inventory[idx][0] = ""
+                # clear output
+                self.inventory[cell][1] = 0
+                return
+            # normal drag/drop
             if self.draggingItem:
                 if self.inventory[cell][1] == 0:
                     self.inventory[cell] = self.draggingItem
@@ -80,6 +91,7 @@ class Inventory:
                 if self.inventory[cell][1] != 0:
                     self.draggingItem = [self.inventory[cell][0], self.inventory[cell][1]]
                     self.inventory[cell][1] = 0
+        # right click (split stacks)
         if button[2]:
             if self.draggingItem:
                 if self.inventory[cell][0] == self.draggingItem[0] and self.draggingItem[1]:
@@ -97,12 +109,14 @@ class Inventory:
             self.inventory[39][0] if self.inventory[39][1] else "",
             self.inventory[40][0] if self.inventory[40][1] else "",
         ])
-        if craftResult == "minecraft:oak_plank":
-            self.inventory[41][0] = 'tnt'
+        # display crafting result (one item for now)
+        if craftResult:
+            self.inventory[41][0] = craftResult
+            self.inventory[41][1] = 1
         else:
-            print("lol:",self.inventory[41])
-            self.inventory[41][0] = 'tnt'
-        print(self.inventory[41]) 
+            # no recipe
+            self.inventory[41][0] = ""
+            self.inventory[41][1] = 0
 
         
         for i in self.window.cellPositions.items():
@@ -116,33 +130,21 @@ class Inventory:
             self.gl.inventory_textures[inv[0]].blit((self.gl.WIDTH // 2 - (win.width // 2)) + xx + 5,
                                                     (self.gl.HEIGHT // 2 + (win.height // 2)) - yy - 27)
             if inv[1] > 1:
-                lx = (self.gl.WIDTH // 2 - (win.width // 2)) + xx + 15
-                ly = (self.gl.HEIGHT // 2 + (win.height // 2)) - yy - 32
-                lbl = pyglet.text.Label(str(inv[1]),
-                                        font_name='Minecraft Rus',
-                                        color=(255, 255, 255, 255),
-                                        font_size=10,
-                                        x=lx, y=ly)
-                lbl.draw()
-
+                    lx = (self.gl.WIDTH // 2 - (win.width // 2)) + xx + 15
+                    ly = (self.gl.HEIGHT // 2 + (win.height // 2)) - yy - 32
+                    drawInfoLabel(self.gl, str(inv[1]), xx=lx, yy=ly, size=10)
         if self.draggingItem:
             if self.draggingItem[1]:
-                drg = self.draggingItem
-                mp = list(mousePos)
-                mp[0] -= 11
-                mp[1] += 11
+                    drg = self.draggingItem
+                    mp = list(mousePos)
+                    mp[0] -= 11
+                    mp[1] += 11
 
-                self.gl.inventory_textures[drg[0]].blit(mp[0], self.gl.HEIGHT - mp[1])
+                    self.gl.inventory_textures[drg[0]].blit(mp[0], self.gl.HEIGHT - mp[1])
 
-                lx = mp[0] + 11
-                ly = self.gl.HEIGHT - mp[1] - 5
-                lbl = pyglet.text.Label(str(drg[1]),
-                                        font_name='Minecraft Rus',
-                                        color=(255, 255, 255, 255),
-                                        font_size=10,
-                                        x=lx, y=ly)
-                lbl.draw()
-
+                    lx = mp[0] + 11
+                    ly = self.gl.HEIGHT - mp[1] - 5
+                    drawInfoLabel(self.gl, str(drg[1]), xx=lx, yy=ly, size=10)
     def addBlock(self, name):
         ext = False
         extech = -1
@@ -181,10 +183,11 @@ class Inventory:
                     continue
                 self.gl.inventory_textures[self.inventory[i][0]].blit(
                     (self.gl.WIDTH // 2 - (inventory.width // 2)) + (40 * i) + 11, 11)
-                self.blocksLabel[i].x = (self.gl.WIDTH // 2 - (inventory.width // 2)) + (40 * i) + 22
-                self.blocksLabel[i].y = 6
-                self.blocksLabel[i].text = str(self.inventory[i][1])
-                self.blocksLabel[i].draw()
+                # draw stack count
+                if self.inventory[i][1] > 1:
+                    lx = (self.gl.WIDTH // 2 - (inventory.width // 2)) + (40 * i) + 22
+                    ly = 6
+                    drawInfoLabel(self.gl, str(self.inventory[i][1]), xx=lx, yy=ly, size=10)
 
         for i in range(10):
             ay = 0

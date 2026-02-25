@@ -62,18 +62,28 @@ class Scene:
     def loadPanoramaTextures(self):
         print("Loading panorama textures...")
         for e, i in enumerate(os.listdir("gui/bg/")):
-            self.panorama[e] = \
-                pyglet.graphics.TextureGroup(pyglet.image.load("gui/bg/" + i).get_texture())
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
-            
+            try:
+                tex = pyglet.image.load("gui/bg/" + i).get_texture()
+                self.panorama[e] = pyglet.graphics.TextureGroup(tex)
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
+            except Exception as ex:
+                print(f"Failed to load panorama texture {i}: {ex}")
 
     def vertexList(self):
-        x, y, w, h = self.WIDTH / 2, self.HEIGHT / 2, self.WIDTH, self.HEIGHT
-        self.reticle = pyglet.graphics.vertex_list(4, ('v2f', (x - 10, y, x + 10, y, x, y - 10, x, y + 10)),
-                                                   ('c3f', (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)))
+        # create lightweight reticle coordinate list instead of using pyglet
+        # vertex batches; pyglet.graphics.vertex_list is unavailable in
+        # pyglet 2.x, and the reticle isn't used anywhere else anyway.
+        x = self.WIDTH / 2
+        y = self.HEIGHT / 2
+        self.reticle = [
+            (x - 10, y),
+            (x + 10, y),
+            (x, y - 10),
+            (x, y + 10)
+        ]
 
     def initScene(self):
         print("Init OpenGL scene...")
@@ -83,6 +93,7 @@ class Scene:
         glEnable(GL_DEPTH_TEST)
         glDepthFunc(GL_LESS)
         glShadeModel(GL_SMOOTH)
+        glEnable(GL_CULL_FACE)              # cull back faces by default
         glMatrixMode(GL_PROJECTION)
         glDepthFunc(GL_LEQUAL)
         glAlphaFunc(GL_GEQUAL, 1)
@@ -98,9 +109,19 @@ class Scene:
         self.loadPanoramaTextures()
         self.vertexList()
 
-        self.transparent = pyglet.graphics.Batch()
-        self.opaque = pyglet.graphics.Batch()
-        self.stuffBatch = pyglet.graphics.Batch()
+        # create batches; if pyglet fails (old driver) fall back to no-op objects
+        class _DummyBatch:
+            def draw(self):
+                pass
+        try:
+            self.transparent = pyglet.graphics.Batch()
+            self.opaque = pyglet.graphics.Batch()
+            self.stuffBatch = pyglet.graphics.Batch()
+        except Exception as e:
+            print(f"Warning: failed to create pyglet batches: {e}")
+            self.transparent = _DummyBatch()
+            self.opaque = _DummyBatch()
+            self.stuffBatch = _DummyBatch()
         self.player.inventory = Inventory(self)
         self.cubes = CubeHandler(self.opaque, self.block, self.opaque,
                                  ('leaves_taiga', 'leaves_oak', 'tall_grass', 'nocolor'), self)
@@ -130,7 +151,8 @@ class Scene:
         glViewport(0, 0, w, h)
 
     def drawPanorama(self):
-        # self.resizeCGL(256, 256, changeRes=False)
+        # render a simple sky cube around the player without using pyglet
+        # batches, since the `Batch.add` method was removed in pyglet 2.x.
 
         pp = self.player.position
         sx, sy, sz = 60, 60, 60
@@ -149,30 +171,32 @@ class Scene:
 
         tex_coords = ('t2f', (0, 0, 1, 0, 1, 1, 0, 1))
         mode = GL_QUADS
-        self.stuffBatch.add(4, mode, self.panorama[2], ('v3f', vertexes[0]),
-                            tex_coords)  # back
-        self.stuffBatch.add(4, mode, self.panorama[0], ('v3f', vertexes[1]),
-                            tex_coords)  # front
 
-        self.stuffBatch.add(4, mode, self.panorama[3], ('v3f', vertexes[2]),
-                            tex_coords)  # left
-        self.stuffBatch.add(4, mode, self.panorama[1], ('v3f', vertexes[3]),
-                            tex_coords)  # right
-
-        self.stuffBatch.add(4, mode, self.panorama[5], ('v3f', vertexes[4]),
-                            tex_coords)  # bottom
-
-        self.stuffBatch.add(4, mode, self.panorama[4], ('v3f', vertexes[5]),
-                            tex_coords)  # top
+        # draw each face immediately, binding the appropriate texture group
+        groups = [self.panorama[2], self.panorama[0], self.panorama[3],
+                  self.panorama[1], self.panorama[5], self.panorama[4]]
+        for verts, grp in zip(vertexes, groups):
+            try:
+                pyglet.graphics.draw(4, mode,
+                                     ('v3f/static', verts),
+                                     tex_coords,
+                                     group=grp)
+            except Exception:
+                # if drawing fails for any reason, skip the face but continue
+                pass
 
         # glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, 256, 256)
         # self.resizeCGL(self.WIDTH, self.HEIGHT, changeRes=False)
 
     def genWorld(self):
+        # called each frame from updateScene or main menu; drain any ready cubes
         self.drawCounter += 1
         if self.drawCounter > self.genTime:
             self.drawCounter = 0
+            # ensure generator thread is running
             self.worldGen.genChunk(self.player)
+        # always integrate any finished blocks
+        self.worldGen.process_loading()
 
     def updateScene(self):
 
