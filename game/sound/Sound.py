@@ -93,6 +93,16 @@ class Sound:
                 if not fname.lower().endswith((".ogg", ".wav", ".mp3")):
                     continue
                 path = os.path.join(root, fname)
+                # special-case music folder: don't treat as normal sound effects
+                if os.path.commonpath([root, os.path.join(base, "music")]) == os.path.join(base, "music"):
+                    # assign to game or menu list based on subdirectory
+                    rel2 = os.path.relpath(root, os.path.join(base, "music"))
+                    parts2 = rel2.split(os.sep)
+                    if parts2[0] == "game":
+                        self.MUSIC.append(path)
+                    elif parts2[0] == "menu":
+                        self.MENU_MUSIC.append(path)
+                    continue
                 rel = os.path.relpath(path, base)
                 parts = rel.split(os.sep)
                 if len(parts) == 1:
