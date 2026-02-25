@@ -94,3 +94,4 @@ class GUI:
                 self.GUI_TEXTURES[key] = self._GuiTex(group, image)
                 # use nearest filtering so GUI stays pixel‑sharp
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
+                print(f"Loaded GUI texture '{key}' from {path}")

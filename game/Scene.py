@@ -61,7 +61,10 @@ class Scene:
 
     def loadPanoramaTextures(self):
         print("Loading panorama textures...")
-        for e, i in enumerate(os.listdir("gui/bg/")):
+        # sort filenames so that face indices are consistent regardless of
+        # filesystem ordering.  Panorama expects files 0..5.
+        files = sorted(os.listdir("gui/bg/"))
+        for e, i in enumerate(files):
             try:
                 tex = pyglet.image.load("gui/bg/" + i).get_texture()
                 self.panorama[e] = pyglet.graphics.TextureGroup(tex)
@@ -69,6 +72,7 @@ class Scene:
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
+                print(f"Loaded panorama texture {e}: {i}")
             except Exception as ex:
                 print(f"Failed to load panorama texture {i}: {ex}")
 
@@ -154,10 +158,12 @@ class Scene:
         # render a simple sky cube around the player without using pyglet
         # batches, since the `Batch.add` method was removed in pyglet 2.x.
 
-        pp = self.player.position
+        # the panorama is just a static skybox; during menus the player may
+        # not be positioned sensibly, so we ignore it entirely and always
+        # draw the cube centered around the origin.  the small size ensures
+        # it is always in front of any scene geometry.
         sx, sy, sz = 60, 60, 60
-
-        x, y, z = pp[0] - (sx // 2), -(sy // 2), pp[2] - (sz // 2)
+        x, y, z = - (sx // 2), - (sy // 2), - (sz // 2)
         X, Y, Z = x + sx, y + sy, z + sz
 
         vertexes = [
