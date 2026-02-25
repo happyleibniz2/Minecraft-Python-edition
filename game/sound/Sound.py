@@ -5,6 +5,11 @@ import pygame
 
 class Sound:
     def __init__(self):
+        # initialise pygame mixer early so sounds can be loaded at startup
+        try:
+            pygame.mixer.init()
+        except Exception:
+            pass
         print("Init Sound class...")
         self.BLOCKS_SOUND = {}
         self.SOUNDS = {}
@@ -15,6 +20,9 @@ class Sound:
         self.musicPlayer = pygame.mixer.music
 
         self.volume = 1
+
+        # load all files from the `sounds` folder into the dictionaries
+        self.load_sounds()
 
     def initMusic(self, t):
         self.musicPlayer.stop()
@@ -37,13 +45,25 @@ class Sound:
                 self.musicPlayer.queue(self.MENU_MUSIC[i])
 
     def playSound(self, name, volume):
-        channel = self.SOUNDS[name].play()
-        channel.set_volume(volume)
+        try:
+            channel = self.SOUNDS[name].play()
+            channel.set_volume(volume)
+        except Exception:
+            pass
 
     def playGuiSound(self, st):
+        # older code referenced uppercase "GUI" key; loader uses lowercase,
+        # so try both keys and warn if missing.
+        key = "GUI" if "GUI" in self.SOUNDS else "gui"
+        if key not in self.SOUNDS:
+            # nothing to play
+            return
         if st == "click":
-            channel = self.SOUNDS["GUI"]["click_stereo"][0].play()
-            channel.set_volume(self.volume)
+            try:
+                channel = self.SOUNDS[key]["click_stereo"][0].play()
+                channel.set_volume(self.volume)
+            except Exception:
+                pass
 
     def playMusic(self):
         if self.music_already_playing:
@@ -52,3 +72,83 @@ class Sound:
             self.music_already_playing = True
             self.musicPlayer.play()
             self.musicPlayer.set_volume(self.volume)
+
+    def load_sounds(self):
+        """Scan the `sounds` directory and populate both SOUNDS and
+        BLOCKS_SOUND dictionaries.
+
+        - Top-level files (e.g. pick.mp3) are stored in BLOCKS_SOUND as
+          simple Sounds (pickUp in earlier code).
+        - Subdirectories become categories in SOUNDS.  For some categories
+          (dig/step) we build a nested dict keyed by material name; for
+          others (damage, gui, explode, etc.) we keep a flat list of
+          sounds or a dict if there are multiple named prefixes.
+        """
+        base = "sounds"
+        if not os.path.isdir(base):
+            return
+        for root, dirs, files in os.walk(base):
+            for fname in files:
+                if not fname.lower().endswith((".ogg", ".wav", ".mp3")):
+                    continue
+                path = os.path.join(root, fname)
+                rel = os.path.relpath(path, base)
+                parts = rel.split(os.sep)
+                if len(parts) == 1:
+                    # file at root level
+                    key = os.path.splitext(parts[0])[0]
+                    if key == "pick":
+                        # legacy naming
+                        key = "pickUp"
+                    try:
+                        snd = pygame.mixer.Sound(path)
+                    except Exception:
+                        continue
+                    self.BLOCKS_SOUND[key] = snd
+                    continue
+                category = parts[0].lower()
+                name = os.path.splitext(parts[-1])[0]
+                # strip digits at end (click1 -> click)
+                base_name = ''.join(ch for ch in name if not ch.isdigit())
+                base_name = base_name.rstrip('_')
+                # ensure category exists
+                if category not in self.SOUNDS:
+                    # dig and step need nested dicts
+                    if category in ("dig", "step"):
+                        self.SOUNDS[category] = {}
+                    else:
+                        # default to list
+                        self.SOUNDS[category] = []
+                if category in ("dig", "step"):
+                    bucket = self.SOUNDS[category]
+                    if base_name not in bucket:
+                        bucket[base_name] = []
+                    try:
+                        bucket[base_name].append(pygame.mixer.Sound(path))
+                    except Exception:
+                        pass
+                else:
+                    if isinstance(self.SOUNDS[category], list):
+                        try:
+                            self.SOUNDS[category].append(pygame.mixer.Sound(path))
+                        except Exception:
+                            pass
+                    else:
+                        # some categories may already be dicts (damage)
+                        d = self.SOUNDS[category]
+                        if base_name not in d:
+                            d[base_name] = []
+                        try:
+                            d[base_name].append(pygame.mixer.Sound(path))
+                        except Exception:
+                            pass
+        # make sure GUI is available under uppercase key as well
+        if "gui" in self.SOUNDS and "GUI" not in self.SOUNDS:
+            self.SOUNDS["GUI"] = self.SOUNDS["gui"]
+        # copy relevant entries for backwards compatibility
+        for cat in ("step", "dig", "explode"):
+            if cat in self.SOUNDS:
+                self.BLOCKS_SOUND[cat] = self.SOUNDS[cat]
+        # also copy pickUp if it ended up in SOUNDS
+        if "pickUp" in self.SOUNDS and "pickUp" not in self.BLOCKS_SOUND:
+            self.BLOCKS_SOUND["pickUp"] = self.SOUNDS["pickUp"]
