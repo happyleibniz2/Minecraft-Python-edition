@@ -184,6 +184,13 @@ def getElpsTime():
 
 
 def checkHover(ox, oy, ow, oh, mx, my):
+    # pygame returns mouse coordinates with origin at top-left, but our
+    # GUI logic uses bottom-left origin.  Convert y before testing.
+    try:
+        from settings import HEIGHT
+        my = HEIGHT - my
+    except Exception:
+        pass
     if ox < mx < ox + ow and oy < my < oy + oh:
         return True
     return False

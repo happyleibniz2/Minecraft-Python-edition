@@ -313,8 +313,14 @@ def draw_main_menu(mc):
     glRotatef(mainMenuRotation[1], 0, 1, 0)
     glTranslatef(0, 0, 0)
 
-    scene.draw()
+    # draw background panorama before any scene geometry so that the
+    # world can overlap it; disable depth testing so the sky cube is always
+    # visible even when we rotate.
+    glDisable(GL_DEPTH_TEST)
     scene.drawPanorama()
+    glEnable(GL_DEPTH_TEST)
+
+    scene.draw()
 
     glPopMatrix()
     scene.set2d()
