@@ -1,5 +1,4 @@
 import random
-# import timeit
 import pygame
 from pyglet import font
 import json
@@ -16,18 +15,39 @@ def load_language():
 
 
 translations = load_language()
+
+# ---- Font loading for pyglet 2.x ----
+FONT_NAME = "Arial"  # fallback
+
 if current_language == "zh":
-    font.add_file('gui/MinecraftAE.ttf')
-    mainFont = font.load('gui/MinecraftAE.ttf', 15)
-elif current_language == "en":
-    font.add_file('gui/main.ttf')
-    mainFont = font.load('gui/main.ttf', 20)
+    font_file = "gui/MinecraftAE.ttf"
+    fallback = "Microsoft YaHei"
+else:
+    font_file = "gui/main.ttf"
+    fallback = "Arial"
+
+try:
+    # Register the font file with pyglet
+    font.add_file(font_file)
+    # The font family name is usually the file name without extension,
+    # but we can try to load it directly using the 'file' parameter.
+    # In pyglet 2.x, you can pass 'file' to load from a path.
+    # If that doesn't work, we fall back to a system font.
+    mainFont = font.load(None, 20, file=font_file)   # works in pyglet 2.x
+    FONT_NAME = mainFont.name                        # store the actual family name
+except Exception:
+    # Fallback to a system font
+    mainFont = font.load(fallback, 20)
+    FONT_NAME = fallback
+
+# For Chinese, we also set the font for the labels.
+# If you want to use the same font for both, you can keep as above.
 
 pygame.init()
 
 monitor = pygame.display.Info()
-WIDTH = 927  # monitor.current_w
-HEIGHT = 566  # monitor.current_h
+WIDTH = 927
+HEIGHT = 566
 MAX_FPS = 120
 PAUSE = True
 IN_MENU = True

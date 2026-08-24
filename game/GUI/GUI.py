@@ -1,4 +1,5 @@
 import pyglet
+from pyglet.sprite import Sprite
 from settings import *
 
 
@@ -40,7 +41,9 @@ class GUI:
             self.lbl.draw()
 
         for i in self.shows.values():
-            i[0].blit(*i[1])
+            # Use Sprite for crosshair
+            sprite = Sprite(i[0], x=i[1][0], y=i[1][1])
+            sprite.draw()
 
     def addGuiElement(self, image, pos):
         self.shows[image] = [self.GUI_TEXTURES[image], pos]

@@ -38,12 +38,14 @@ class Sound:
 
     def playSound(self, name, volume):
         channel = self.SOUNDS[name].play()
-        channel.set_volume(volume)
+        if channel is not None:
+            channel.set_volume(volume)
 
     def playGuiSound(self, st):
         if st == "click":
             channel = self.SOUNDS["GUI"]["click_stereo"][0].play()
-            channel.set_volume(self.volume)
+            if channel is not None:
+                channel.set_volume(self.volume)
 
     def playMusic(self):
         if self.music_already_playing:

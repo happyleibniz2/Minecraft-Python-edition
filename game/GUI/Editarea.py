@@ -1,3 +1,4 @@
+from pyglet.sprite import Sprite
 from functions import *
 from settings import *
 
@@ -13,8 +14,12 @@ class Editarea:
         self.focused = False
         self.curFade = [1, True]
         self.bg = gl.gui.GUI_TEXTURES["edit_bg"]
+        self.bg_sprite = None
 
     def update(self, mp, mc, keys):
+        y_pos = self.gl.HEIGHT - self.y - self.bg.height
+        self.bg_sprite = Sprite(self.bg, x=self.x, y=y_pos)
+
         if checkHover(self.x, self.y,
                       self.bg.width, self.bg.height,
                       mp[0], mp[1]):
@@ -43,7 +48,7 @@ class Editarea:
                     except ValueError:
                         pass
 
-        self.bg.blit(self.x, self.gl.HEIGHT - self.y - self.bg.height)
+        self.bg_sprite.draw()
         drawInfoLabel(self.gl, self.text, xx=self.x + 10, yy=self.gl.HEIGHT - self.y - 25, style=[('', '')],
                       size=12)
         if not self.focused and not self.text:
@@ -65,6 +70,6 @@ class Editarea:
             text = pyglet.text.Label(self.text, font_name='Minecraft Rus')
             drawInfoLabel(self.gl, "_", xx=self.x + 12 + text.content_width, yy=self.gl.HEIGHT - self.y - 25,
                           style=[('', '')], size=12, opacity=self.curFade[0])
-            
-    def setEvent(self, event):  # Add this method
+
+    def setEvent(self, event):
         self.event = event

@@ -16,10 +16,18 @@ class DestroyBlock:
     def loadTextures(self):
         print("Loading block destroy textures...")
         for e, i in enumerate(os.listdir("textures/blocks/block_destroy")):
-            self.textures[e] = \
-                pyglet.graphics.TextureGroup(pyglet.image.load("textures/blocks/block_destroy/" + i)
-                                             .get_mipmapped_texture())
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
+            img = pyglet.image.load("textures/blocks/block_destroy/" + i)
+            try:
+                tex = img.get_texture(rectangle=True)
+            except TypeError:
+                tex = img.get_texture()
+            if hasattr(tex, 'mag_filter'):
+                tex.mag_filter = GL_NEAREST
+                tex.min_filter = GL_NEAREST
+            else:
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
+            self.textures[e] = tex
 
     def drawDestroy(self, ox, oy, oz):
         if self.destroyStage == -1:

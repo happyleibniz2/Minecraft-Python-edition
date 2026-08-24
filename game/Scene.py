@@ -16,6 +16,89 @@ from game.world.worldGenerator import worldGenerator
 from game.blocks.CubeHandler import CubeHandler
 
 
+class CompatVertexList:
+    def __init__(self, count, mode, texture, *attributes):
+        self.count = count
+        self.mode = mode
+        self.texture = texture
+        self.attributes = {}
+        for name, values in attributes:
+            self.attributes[name] = values
+
+    def draw(self):
+        if self.texture is not None:
+            texture = self.texture
+            if hasattr(texture, 'bind'):
+                texture.bind()
+            elif hasattr(texture, 'get_texture'):
+                texture = texture.get_texture()
+                texture.bind()
+            else:
+                glBindTexture(GL_TEXTURE_2D, int(texture))
+
+        glBegin(self.mode)
+        vertices = self.attributes.get('v3f', ())
+        tex_coords = self.attributes.get('t2f', ())
+        colors = self.attributes.get('c3f', ())
+
+        for i in range(0, len(vertices), 3):
+            vertex_index = i // 3
+            if tex_coords:
+                uv_index = vertex_index * 2
+                glTexCoord2f(tex_coords[uv_index], tex_coords[uv_index + 1])
+            if colors:
+                color_index = vertex_index * 3
+                glColor3f(colors[color_index], colors[color_index + 1], colors[color_index + 2])
+            glVertex3f(vertices[i], vertices[i + 1], vertices[i + 2])
+        glEnd()
+
+        glColor3f(1.0, 1.0, 1.0)
+        glBindTexture(GL_TEXTURE_2D, 0)
+
+    def delete(self):
+        pass
+
+
+class CompatBatch:
+    def __init__(self):
+        self._items = []
+
+    def add(self, count, mode, texture, *attributes):
+        item = CompatVertexList(count, mode, texture, *attributes)
+        self._items.append(item)
+        return item
+
+    def draw(self):
+        for item in self._items:
+            item.draw()
+
+    def __iter__(self):
+        return iter(self._items)
+
+
+def compat_draw(vertices, mode=GL_QUADS, texture=None, texcoords=None, colors=None):
+    if texture is not None:
+        if hasattr(texture, 'bind'):
+            texture.bind()
+        elif hasattr(texture, 'get_texture'):
+            texture = texture.get_texture()
+            texture.bind()
+        else:
+            glBindTexture(GL_TEXTURE_2D, int(texture))
+
+    glBegin(mode)
+    for i in range(0, len(vertices), 3):
+        if texcoords:
+            glTexCoord2f(texcoords[i * 2], texcoords[i * 2 + 1])
+        if colors:
+            glColor3f(colors[i], colors[i + 1], colors[i + 2])
+        glVertex3f(vertices[i], vertices[i + 1], vertices[i + 2])
+    glEnd()
+
+    glColor3f(1.0, 1.0, 1.0)
+    glBindTexture(GL_TEXTURE_2D, 0)
+
+
 class Scene:
     def __init__(self):
         print("Init Scene class...")
@@ -34,7 +117,7 @@ class Scene:
         self.fov = FOV
         self.updateEvents = []
         self.entity = []
-        self.skyColor = [128, 179, 255]  # [64, 89, 150]
+        self.skyColor = [128, 179, 255]
         self.panorama = {}
         self.in_water = False
 
@@ -62,18 +145,22 @@ class Scene:
     def loadPanoramaTextures(self):
         print("Loading panorama textures...")
         for e, i in enumerate(os.listdir("gui/bg/")):
-            self.panorama[e] = \
-                pyglet.graphics.TextureGroup(pyglet.image.load("gui/bg/" + i).get_texture())
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
-            
-
-    def vertexList(self):
-        x, y, w, h = self.WIDTH / 2, self.HEIGHT / 2, self.WIDTH, self.HEIGHT
-        self.reticle = pyglet.graphics.vertex_list(4, ('v2f', (x - 10, y, x + 10, y, x, y - 10, x, y + 10)),
-                                                   ('c3f', (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)))
+            image = pyglet.image.load("gui/bg/" + i)
+            try:
+                tex = image.get_texture(rectangle=True)
+            except TypeError:
+                tex = image.get_texture()
+            self.panorama[e] = tex
+            if hasattr(tex, 'mag_filter'):
+                tex.mag_filter = GL_LINEAR
+                tex.min_filter = GL_LINEAR
+                tex.wrap_s = GL_CLAMP_TO_EDGE
+                tex.wrap_t = GL_CLAMP_TO_EDGE
+            else:
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
 
     def initScene(self):
         print("Init OpenGL scene...")
@@ -96,11 +183,10 @@ class Scene:
         glLoadIdentity()
         load_textures(self)
         self.loadPanoramaTextures()
-        self.vertexList()
 
-        self.transparent = pyglet.graphics.Batch()
-        self.opaque = pyglet.graphics.Batch()
-        self.stuffBatch = pyglet.graphics.Batch()
+        self.transparent = CompatBatch()
+        self.opaque = CompatBatch()
+        self.stuffBatch = CompatBatch()
         self.player.inventory = Inventory(self)
         self.cubes = CubeHandler(self.opaque, self.block, self.opaque,
                                  ('leaves_taiga', 'leaves_oak', 'tall_grass', 'nocolor'), self)
@@ -126,47 +212,35 @@ class Scene:
         if changeRes:
             self.WIDTH = w
             self.HEIGHT = h
-        self.vertexList()
         glViewport(0, 0, w, h)
 
     def drawPanorama(self):
-        # self.resizeCGL(256, 256, changeRes=False)
-
+        # Use immediate mode OpenGL for the panorama
         pp = self.player.position
         sx, sy, sz = 60, 60, 60
 
         x, y, z = pp[0] - (sx // 2), -(sy // 2), pp[2] - (sz // 2)
         X, Y, Z = x + sx, y + sy, z + sz
 
-        vertexes = [
-            (X, y, z, x, y, z, x, Y, z, X, Y, z),
-            (x, y, Z, X, y, Z, X, Y, Z, x, Y, Z),
-            (x, y, z, x, y, Z, x, Y, Z, x, Y, z),
-            (X, y, Z, X, y, z, X, Y, z, X, Y, Z),
-            (x, y, z, X, y, z, X, y, Z, x, y, Z),
-            (x, Y, Z, X, Y, Z, X, Y, z, x, Y, z),
+        # Define faces: (texture, vertices)
+        faces = [
+            (self.panorama[2], X, y, z, x, y, z, x, Y, z, X, Y, z),  # back
+            (self.panorama[0], x, y, Z, X, y, Z, X, Y, Z, x, Y, Z),  # front
+            (self.panorama[3], x, y, z, x, y, Z, x, Y, Z, x, Y, z),  # left
+            (self.panorama[1], X, y, Z, X, y, z, X, Y, z, X, Y, Z),  # right
+            (self.panorama[5], x, y, z, X, y, z, X, y, Z, x, y, Z),  # bottom
+            (self.panorama[4], x, Y, Z, X, Y, Z, X, Y, z, x, Y, z),  # top
         ]
 
-        tex_coords = ('t2f', (0, 0, 1, 0, 1, 1, 0, 1))
-        mode = GL_QUADS
-        self.stuffBatch.add(4, mode, self.panorama[2], ('v3f', vertexes[0]),
-                            tex_coords)  # back
-        self.stuffBatch.add(4, mode, self.panorama[0], ('v3f', vertexes[1]),
-                            tex_coords)  # front
-
-        self.stuffBatch.add(4, mode, self.panorama[3], ('v3f', vertexes[2]),
-                            tex_coords)  # left
-        self.stuffBatch.add(4, mode, self.panorama[1], ('v3f', vertexes[3]),
-                            tex_coords)  # right
-
-        self.stuffBatch.add(4, mode, self.panorama[5], ('v3f', vertexes[4]),
-                            tex_coords)  # bottom
-
-        self.stuffBatch.add(4, mode, self.panorama[4], ('v3f', vertexes[5]),
-                            tex_coords)  # top
-
-        # glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, 256, 256)
-        # self.resizeCGL(self.WIDTH, self.HEIGHT, changeRes=False)
+        for tex, v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11 in faces:
+            glBindTexture(GL_TEXTURE_2D, tex.id)
+            glBegin(GL_QUADS)
+            glTexCoord2f(0, 0); glVertex3f(v0, v1, v2)
+            glTexCoord2f(1, 0); glVertex3f(v3, v4, v5)
+            glTexCoord2f(1, 1); glVertex3f(v6, v7, v8)
+            glTexCoord2f(0, 1); glVertex3f(v9, v10, v11)
+            glEnd()
+        glBindTexture(GL_TEXTURE_2D, 0)
 
     def genWorld(self):
         self.drawCounter += 1
@@ -210,7 +284,7 @@ class Scene:
 
             glPolygonMode(GL_FRONT_AND_BACK, GL_LINE)
             glColor3d(0, 0, 0)
-            pyglet.graphics.draw(24, GL_QUADS, ('v3f/static', flatten(cube_vertices(blockByVec[0], 0.51))))
+            compat_draw(flatten(cube_vertices(blockByVec[0], 0.51)), mode=GL_QUADS)
             glPolygonMode(GL_FRONT_AND_BACK, GL_FILL)
             glColor3d(1, 1, 1)
 
@@ -238,4 +312,4 @@ class Scene:
         self.transparent.draw()
 
         self.stuffBatch.draw()
-        self.stuffBatch = pyglet.graphics.Batch()
+        self.stuffBatch = CompatBatch()
