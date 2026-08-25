@@ -27,6 +27,7 @@ class worldGenerator:
         self.start = len(self.queue)
         self.blocks = {}  # dict(pickle.loads(self.world))
         self.loading = deque()
+        self.last_gen_tick = 0
 
     def add(self, p, t):
         if p in self.blocks:
@@ -35,20 +36,33 @@ class worldGenerator:
         self.loading.append((p, t))
         self.gl.cubes.add(p, t)
 
-    def genChunk(self, player):
+    def genChunk(self, player, max_chunks_per_call=8, max_blocks_per_call=256):
         if player.hp == -1:
             player.hp = 20
 
-        if self.queue:
+        now = pygame.time.get_ticks()
+        if now - getattr(self, 'last_gen_tick', 0) < 15:
+            return
+        self.last_gen_tick = now
+
+        chunks_processed = 0
+        while self.queue and chunks_processed < max_chunks_per_call:
             self.gen(*self.queue.popleft())
-            while self.loading:
-                p, t = self.loading.popleft()
-                self.gl.cubes.updateCube(self.gl.cubes.cubes[p])
+            chunks_processed += 1
+
+        block_budget = max_blocks_per_call
+        while self.loading and block_budget > 0:
+            p, t = self.loading.popleft()
+            if p in self.gl.cubes.cubes:
+                try:
+                    self.gl.cubes.updateCube(self.gl.cubes.cubes[p])
+                except Exception:
+                    pass
+            block_budget -= 1
 
     def gen(self, xx, zz):
         sy = CHUNK_SIZE[1]
         oldY = 0
-        self.genOre(-2.0, 59.75, -2.0)
         for x in range(xx, xx + CHUNK_SIZE[0]):
             for z in range(zz, zz + CHUNK_SIZE[2]):
                 y = self.worldPerlin(x, z)
@@ -69,7 +83,6 @@ class worldGenerator:
 
                 spawnTree = random.randint(0, ch) == 20 and y > sy - 5
                 af = activeBiome.getBiomeGrass()
-                print(af)
                 self.add((x, y, z), af)
                 if self.gl.startPlayerPos == [0, -9000, 0] and not spawnTree:
                     self.gl.startPlayerPos = [x, y + 2, z]
@@ -80,14 +93,11 @@ class worldGenerator:
                     self.spawnTree(x, y, z)
 
                 self.add((x, 0, z), "bedrock")
-                # self.add((x,-1,z),"emerald_ore")
                 for i in range(1, y):
                     if i > y - random.randint(5, 10):
                         self.add((x, i, z), activeBiome.getBiomeDirt())
-                        af = activeBiome.getBiomePlant()
-                        if af == "cactus":
-                            self.add((x, i - 1, z), "cactus")
-                            self.add((x, i - 2, z), "cactus")
+                        if activeBiome.getBiomePlant() == "cactus":
+                            self.add((x, y + 1, z), "cactus")
                     else:
                         self.add((x, i, z), activeBiome.getBiomeStone())
                         self.genOre(x, i, z)
@@ -97,18 +107,17 @@ class worldGenerator:
             return
         r1 = random.randint(-1, 2)
         r2 = random.randint(0, 2)
-        ore = self.getOreByY(y)
+        ore = self.getOreByY(int(y))
 
         for xi in range(r1, r2):
             for yi in range(r1):
                 for zi in range(r2):
-                    self.add((x + xi, yi + y, zi + z), ore)
+                    self.add((int(x + xi), int(y + yi), int(z + zi)), ore)
 
     def getOreByY(self, y):
         if y < 20:
             _diamond = random.randint(1, 1176)
             if _diamond > 54:
-                print("diamond generated at ", _diamond)
                 return "diamond_ore"
             if random.randint(1, 1234) > 54:
                 return "emerald_ore"

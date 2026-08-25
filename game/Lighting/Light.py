@@ -48,9 +48,9 @@ class Light:
             x, y, z = i[0]
             mx, mn = (lightDist // 2), -(lightDist // 2)
 
-            if x not in range(px - mn, px + mx) and \
-                    y not in range(py - mn, py + mx) and \
-                    z not in range(pz - mn, pz + mx) and \
+            if (x not in range(px - mn, px + mx) or
+                    y not in range(py - mn, py + mx) or
+                    z not in range(pz - mn, pz + mx)) and \
                     (x, y, z) in self.gl.cubes.cubes:
                 self.gl.cubes.updateCube(self.gl.cubes.cubes[(x, y, z)], customColor={
                     'left': ('c3f', (0.1,) * 12),

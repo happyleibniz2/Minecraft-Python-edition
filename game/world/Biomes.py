@@ -2,26 +2,25 @@ all_biomes = ["forest", "desert", "ocean", "taiga", "mountains", "big_mountains"
 
 
 def getBiomeByTemp(temp):
-    print(temp)
+    temp = float(temp)
     """
-     9:0.7
-    =1:0.77777777777777777777777777777777777777777777777777
+    Classic alpha 1.2.3-like climate bands:
+    - hotter = desert / ocean edge
+    - moderate = forest
+    - cold = taiga
+    - very cold = mountains / big mountains
     """
-    # if 50 > temp > 3.57
-    if temp > 30:
-        return all_biomes[2]
-    if 30 >= temp > 20:
-        return all_biomes[1]  # Desert
-    if 20 >= temp > 10:
-        print(f"{temp} is Forest")
-        return all_biomes[0]  # Forest
-    if 10 >= temp >= 0:
-        return all_biomes[3]  # Taiga
-    if 0 >= temp > -25:
+    if temp >= 24:
+        return all_biomes[2]  # ocean
+    if temp >= 12:
+        return all_biomes[1]  # desert
+    if temp >= 2:
+        return all_biomes[0]  # forest
+    if temp >= -8:
+        return all_biomes[3]  # taiga
+    if temp >= -30:
         return all_biomes[4]  # mountains
-    if -25 >= temp >= 120:
-        return all_biomes[5]  # bIg mountains
-    # return all_biomes[2]  # Taiga
+    return all_biomes[5]  # big mountains
 
 
 class Biomes:

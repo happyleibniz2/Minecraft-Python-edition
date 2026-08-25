@@ -129,6 +129,7 @@ def drawInfoLabel(gl, text, xx=0, yy=0, style=None, size=15, anchor_x='left', an
             for st in style:
                 lbl.set_style(st[0], st[1])
                 shadow_lbl.set_style(st[0], st[1])
+        glPushMatrix()
         if rotate:
             glRotatef(rotate, 0.0, 0.0, 1.0)
         if scale:
@@ -136,10 +137,9 @@ def drawInfoLabel(gl, text, xx=0, yy=0, style=None, size=15, anchor_x='left', an
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
         if shadow:
-            shadow_lbl.draw()  # TODO:pyglet.gl.lib.GLException: b'invalid value'
+            shadow_lbl.draw()
             lbl.draw()
-        if rotate:
-            glRotatef(-rotate, 0.0, 0.0, 1.0)
+        glPopMatrix()
         y -= 21
 
 

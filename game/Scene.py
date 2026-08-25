@@ -67,11 +67,24 @@ class Scene:
 
     def loadPanoramaTextures(self):
         print("Loading panorama textures...")
-        for e, i in enumerate(os.listdir(str(open("assets/Minecraft/panorama.txt", "r+").read()))):
-            self.panorama[e] = \
-                pyglet.graphics.TextureGroup(
-                    pyglet.image.load(str(open("assets/Minecraft/panorama.txt", "r+").read()) + i).get_texture())
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)  # GL_LINEAR
+        panorama_path = ""
+        panorama_file = os.path.join("assets", "Minecraft", "panorama.txt")
+        if os.path.exists(panorama_file):
+            with open(panorama_file, "r", encoding="utf-8") as panorama_handle:
+                panorama_path = panorama_handle.read().strip().rstrip("/\\")
+        if not panorama_path:
+            panorama_path = os.path.join("assets", "Minecraft", "textures", "gui", "title", "background", "120x")
+        panorama_path = panorama_path if os.path.isabs(panorama_path) else os.path.join(os.getcwd(), panorama_path)
+
+        if not os.path.isdir(panorama_path):
+            raise FileNotFoundError(f"Panorama directory not found: {panorama_path}")
+
+        for e, i in enumerate(sorted(os.listdir(panorama_path))):
+            image_path = os.path.join(panorama_path, i)
+            if not os.path.isfile(image_path):
+                continue
+            self.panorama[e] = pyglet.graphics.TextureGroup(pyglet.image.load(image_path).get_texture())
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
@@ -227,7 +240,7 @@ class Scene:
         self.drawCounter += 1
         if self.drawCounter > self.genTime:
             self.drawCounter = 0
-        self.worldGen.genChunk(self.player)
+        self.worldGen.genChunk(self.player, max_chunks_per_call=8, max_blocks_per_call=256)
 
     def updateScene(self):
 
@@ -294,5 +307,5 @@ class Scene:
         try:
             self.stuffBatch.draw()
         except pyglet.gl.lib.GLException:
-            print("pyglet.gl.lib.GLException: b'invalid value'")
+            logging.exception("GL batch draw failed while rendering scene")
         self.stuffBatch = pyglet.graphics.Batch()

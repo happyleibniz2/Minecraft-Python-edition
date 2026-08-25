@@ -17,5 +17,5 @@ class ModLoader:
 
     def try_better(self):
         self.settings.MAX_FPS = 200
-        self.settings.RENDER_DISTANCE = 16
+        self.settings.RENDER_DISTANCE = 96
         self.garbage_collector.collect()

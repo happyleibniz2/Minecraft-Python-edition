@@ -1,4 +1,3 @@
-
 import math
 from random import randint
 
@@ -18,7 +17,7 @@ class Player:
         print("Init Player class...")
         self.is_spectator = False
         self.position, self.rotation = [x, y, z], rotation
-        self.speed = 0.04
+        self.speed = 0.12 # controlls the speed of the player
         self.gl = gl
         self.gl.allowEvents.setdefault("collisions", True)
         self.gravity = 5.8
@@ -27,7 +26,8 @@ class Player:
         self.shift = 0
         self.cameraShake = [0, False]
         self.canShake = True
-        self.acceleration = 0
+        self.acceleration = 0.0
+        self.current_move_speed = 0.0
         self.lastShiftPos = self.position
         self.cameraType = 1
         self.hp = -1
@@ -97,33 +97,57 @@ class Player:
                      (self.speed + self.acceleration - 0.008) * math.cos(rotY)
 
             key = pygame.key.get_pressed()
+            if not key[pygame.K_w]:
+                self.kW = 0
+            if not key[pygame.K_s]:
+                self.kS = 0
+            if not key[pygame.K_a]:
+                self.kA = 0
+            if not key[pygame.K_d]:
+                self.kD = 0
+
+            move_input = 0
+            if self.kW > 0 or key[pygame.K_w]:
+                move_input += 1
+            if self.kS > 0 or key[pygame.K_s]:
+                move_input += 1
+            if self.kA > 0 or key[pygame.K_a]:
+                move_input += 1
+            if self.kD > 0 or key[pygame.K_d]:
+                move_input += 1
+
+            if move_input:
+                self.current_move_speed = min(self.current_move_speed + 0.035, self.speed)
+            else:
+                self.current_move_speed = max(self.current_move_speed - 0.065, 0.0)
+
             if key[pygame.K_LCTRL]:
                 self.acceleration = 0.009
             if self.kW > 0 or key[pygame.K_w]:
-                DX += dx
-                DZ -= dz
+                DX += self.current_move_speed * math.sin(rotY)
+                DZ -= self.current_move_speed * math.cos(rotY)
                 self.setCameraShake()
                 if self.kW > 0:
                     self.kW -= minKd
             else:
                 self.acceleration = 0
             if self.kS > 0 or key[pygame.K_s]:
-                DX -= dx
-                DZ += dz
+                DX -= self.current_move_speed * math.sin(rotY)
+                DZ += self.current_move_speed * math.cos(rotY)
                 self.setCameraShake()
                 self.acceleration = 0
                 if self.kS > 0:
                     self.kS -= minKd
             if self.kA > 0 or key[pygame.K_a]:
-                DX -= dz
-                DZ -= dx
+                DX -= self.current_move_speed * math.cos(rotY)
+                DZ -= self.current_move_speed * math.sin(rotY)
                 self.setCameraShake()
                 self.acceleration = 0
                 if self.kA > 0:
                     self.kA -= minKd
             if self.kD > 0 or key[pygame.K_d]:
-                DX += dz
-                DZ += dx
+                DX += self.current_move_speed * math.cos(rotY)
+                DZ += self.current_move_speed * math.sin(rotY)
                 self.setCameraShake()
                 self.acceleration = 0
                 if self.kD > 0:
@@ -212,6 +236,7 @@ class Player:
                     self.gl.fov -= 0.2
                 else:
                     self.gl.fov = FOV
+            self.gl.set3d()
 
             if not self.bInAir:
                 for i in range(1, 6):

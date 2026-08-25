@@ -1,22 +1,19 @@
-def getCraftingItem(objects, tableType=False , numbers = None):
+def getCraftingItem(objects, tableType=False, numbers=None):
     if numbers is None:
-        print("Warning: not provided a numbers")
-    else:
-        numbers = numbers
-    item = ["wood", 0]
-    print(objects)
-    if tableType:  # 3x3
-        pass
-    else:  # 2x2
-        if "['log_oak', '', '', '']" == str(objects):
-            return ["planks_oak",numbers[0]]
-        else:
-            pass
+        numbers = [1, 1, 1, 1]
 
-        if "['planks_oak', 'planks_oak', 'planks_oak', 'planks_oak']" == str(objects):
-            print("crafting table! lets go!")
-            return ["crafting_table",numbers[0]]
-        else:
-            pass
+    if not isinstance(objects, (list, tuple)) or len(objects) != 4:
+        return ["", 0]
 
-    return item
+    if tableType:
+        return ["", 0]
+
+    slots = [str(slot) for slot in objects]
+    counts = [int(n) if str(n).isdigit() else 1 for n in numbers[:4]]
+
+    if objects == ["log_oak", "", "", ""]:
+        return ["planks_oak", counts[0] or 1]
+    if objects == ["planks_oak", "planks_oak", "planks_oak", "planks_oak"]:
+        return ["crafting_table", counts[0] or 1]
+
+    return ["", 0]

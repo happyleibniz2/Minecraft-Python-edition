@@ -96,22 +96,10 @@ void main()
         return None, None
     
     def create_shader_program(self,vertex_shader, fragment_shader):
-        program = glCreateProgram()
-        glAttachShader(program, vertex_shader)
-        glAttachShader(program, fragment_shader)
-        glLinkProgram(program)
-        if glGetProgramiv(program, GL_LINK_STATUS) != GL_TRUE:
-            error = glGetProgramInfoLog(program).decode()
-            print(f"Program link failed: {error}")
-        return program
+        return 0
     
     def compile_shader(self,source, shader_type):
-        shader = glCreateShader(shader_type)
-        glShaderSource(shader, source)
-        if glGetShaderiv(shader, GL_COMPILE_STATUS) != GL_TRUE:
-            error = glGetShaderInfoLog(shader)
-            print(f"Shader compile failed: {error}")
-        return shader
+        return 0
 
     def show(self, v, t, i, clrC=None):
         # # After creating the shader program
@@ -181,14 +169,17 @@ void main()
         d = X - x, Y - y, Z - z
         f = 'left', 'right', 'bottom', 'top', 'back', 'front'
         for i in (0, 1, 2):
-            if d[i]:
-                j = i + i
-                a, b = [f[j + 1], f[j]][::d[i]]
-                cube.shown[a] = state
-                if not state and cube.faces[a]:
-                    cube.faces[a].delete()
-                    face = cube.faces[a]
-                    cube.faces[a] = None
+            if d[i] == 0:
+                continue
+            j = i + i
+            if d[i] > 0:
+                a, b = f[j + 1], f[j]
+            else:
+                a, b = f[j], f[j + 1]
+            cube.shown[a] = state
+            if not state and cube.faces[a]:
+                cube.faces[a].delete()
+                cube.faces[a] = None
 
     def add(self, p, t, now=False):
         if p in self.cubes:

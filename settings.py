@@ -26,10 +26,8 @@ elif current_language == "en":
 pygame.init()
 
 monitor = pygame.display.Info()
-WIDTH = 927  # monitor.current_w
-HEIGHT = 566  # monitor.current_h
-WIDTH = 854
-HEIGHT = 480
+WIDTH = monitor.current_w
+HEIGHT = monitor.current_h
 MAX_FPS = 120
 PAUSE = True
 IN_MENU = True

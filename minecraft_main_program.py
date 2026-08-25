@@ -40,20 +40,26 @@ pyglet.options['debug_gl'] = False
 
 def log_deb(msg):
     logging.debug(msg)
-    print(msg)
+    #print(msg)
 
 
 def choose_langs():
-    global lang_choose, mainFunction
+    global lang_choose, mainFunction, translations
+    current = settings.current_language
+    settings.current_language = "zh" if current == "en" else "en"
+    settings.lang_type = settings.current_language
+    settings.translations = settings.load_language()
+    translations = settings.translations
+    if settings.current_language == "zh":
+        pyglet.font.add_file('gui/MinecraftAE.ttf')
+    else:
+        pyglet.font.add_file('gui/main.ttf')
+
     with open("gui/lang.mclanguage", "w") as mclanguagefile:
-        if settings.lang_type == "en":
-            mclanguagefile.write("zh")
-        else:
-            mclanguagefile.write("en")
-    pygame.quit()
-    print(os.getcwd())
-    os.system("run.bat")
-    sys.exit()
+        mclanguagefile.write(settings.current_language)
+
+    if hasattr(gui, 'GUI_TEXTURES'):
+        gui.GUI_TEXTURES = gui.GUI_TEXTURES
 
 
 def respawn():
@@ -93,7 +99,7 @@ def quit_to_menu():
     drawInfoLabel(scene, translations["quit.mainmenu"], xx=scene.WIDTH // 2, yy=scene.HEIGHT // 2,
                   style=[('', '')], size=12, anchor_x='center')
     pygame.display.flip()
-    # clock.tick(MAX_FPS)
+    clock.tick(MAX_FPS)
 
     PAUSE = True
     IN_MENU = True
@@ -171,7 +177,7 @@ def draw_command(mc):
     commandEditArea.y = scene.HEIGHT // 2 - (commandEditArea.bg.height // 2)
     commandEditArea.update(mp, mc, _keys)
     pygame.display.flip()
-    # clock.tick(MAX_FPS)
+    clock.tick(MAX_FPS)
 
 
 def draw_panorama_menu(mc):
@@ -722,6 +728,15 @@ while True:
             player.rotation[1] += x
         if event.type == pygame.QUIT:
             exit()
+        if event.type == pygame.KEYUP:
+            if event.key == pygame.K_w:
+                player.kW = 0
+            if event.key == pygame.K_s:
+                player.kS = 0
+            if event.key == pygame.K_a:
+                player.kA = 0
+            if event.key == pygame.K_d:
+                player.kD = 0
         if event.type == pygame.KEYDOWN:
             keys.append(event.key)
             if event.key == pygame.K_F11:
@@ -837,7 +852,7 @@ while True:
                                     shadow=False, label_color=(224, 224, 224), xx=scene.WIDTH // 2, yy=scene.HEIGHT // 2,
                   style=[('', '')], size=12, anchor_x='center')
         pygame.display.flip()
-        # clock.tick(MAX_FPS)
+        clock.tick(MAX_FPS)
     elif PAUSE and not IN_MENU:
         scene.allowEvents["movePlayer"] = False
         scene.allowEvents["keyboardAndMouse"] = False

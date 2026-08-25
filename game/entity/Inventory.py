@@ -97,40 +97,28 @@ class Inventory:
                     self.draggingItem[1] -= 1
 
     def updateWindow(self, win, mousePos):
-        craftResult = getCraftingItem([
+        crafting_slots = [
             self.inventory[37][0] if self.inventory[37][1] else "",
             self.inventory[38][0] if self.inventory[38][1] else "",
             self.inventory[39][0] if self.inventory[39][1] else "",
             self.inventory[40][0] if self.inventory[40][1] else "",
-        ],numbers = [
-            self.inventory[37][1] if self.inventory[37][1] else "",
-            self.inventory[38][1] if self.inventory[38][1] else "",
-            self.inventory[39][1] if self.inventory[39][1] else "",
-            self.inventory[40][1] if self.inventory[40][1] else "",
-        ])
-        print(self.draggingItem)
-        if str(craftResult[0]) == "crafting_table":
+        ]
+        crafting_counts = [
+            self.inventory[37][1] if self.inventory[37][1] else 0,
+            self.inventory[38][1] if self.inventory[38][1] else 0,
+            self.inventory[39][1] if self.inventory[39][1] else 0,
+            self.inventory[40][1] if self.inventory[40][1] else 0,
+        ]
+        craftResult = getCraftingItem(crafting_slots, numbers=crafting_counts)
+
+        if craftResult and craftResult[0]:
             self.inventory[41] = craftResult
-            try:
-                if self.inventory[41] and self.draggingItem[1]:
-                    self.draggingItem = ['crafting_table', int(craftResult[1])]
-                    self.clearCraftingSlots()
-                else:
-                    pass
-            except IndexError:
-                pass
-        if str(craftResult[0]) == "planks_oak":
-            self.inventory[41] = craftResult
-            print(self.inventory[41])
-            try:
-                if self.inventory[41] and self.draggingItem[1]:
-                    self.draggingItem = ['planks_oak', int(craftResult[1])]
-                    self.clearCraftingSlots()
-                else:
-                    pass
-            except IndexError:
-                pass
-            
+        else:
+            self.inventory[41] = ["", 0]
+
+        if self.inventory[41][0] and self.draggingItem and self.draggingItem[1]:
+            self.draggingItem = [self.inventory[41][0], int(self.inventory[41][1])]
+            self.clearCraftingSlots()
 
         for i in self.window.cellPositions.items():
             xx, yy = self.window.cellPositions[i[0]][0][0], self.window.cellPositions[i[0]][0][1]
