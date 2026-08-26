@@ -1,8 +1,6 @@
 import os
-
 import pyglet
 from OpenGL.GL import *
-
 
 class DestroyBlock:
     def __init__(self, gl):
@@ -10,7 +8,6 @@ class DestroyBlock:
         self.destroyStage = -1
         self.textures = {}
         self.destroyPos = [0, 0, 0]
-
         self.loadTextures()
 
     def loadTextures(self):
@@ -41,40 +38,33 @@ class DestroyBlock:
         tex_coords = ('t2f', (0, 0, 1, 0, 1, 1, 0, 1))
         mode = GL_QUADS
         stg = int(self.destroyStage)
-        self.gl.stuffBatch.add(4, mode, self.textures[stg], ('v3f', vertexes[0]),
-                               tex_coords)  # back
-        self.gl.stuffBatch.add(4, mode, self.textures[stg], ('v3f', vertexes[1]),
-                               tex_coords)  # front
+        self.gl.stuffBatch.add(4, mode, self.textures[stg], ('v3f', vertexes[0]), tex_coords)
+        self.gl.stuffBatch.add(4, mode, self.textures[stg], ('v3f', vertexes[1]), tex_coords)
+        self.gl.stuffBatch.add(4, mode, self.textures[stg], ('v3f', vertexes[2]), tex_coords)
+        self.gl.stuffBatch.add(4, mode, self.textures[stg], ('v3f', vertexes[3]), tex_coords)
+        self.gl.stuffBatch.add(4, mode, self.textures[stg], ('v3f', vertexes[4]), tex_coords)
+        self.gl.stuffBatch.add(4, mode, self.textures[stg], ('v3f', vertexes[5]), tex_coords)
 
-        self.gl.stuffBatch.add(4, mode, self.textures[stg], ('v3f', vertexes[2]),
-                               tex_coords)  # left
-        self.gl.stuffBatch.add(4, mode, self.textures[stg], ('v3f', vertexes[3]),
-                               tex_coords)  # right
-
-        self.gl.stuffBatch.add(4, mode, self.textures[stg], ('v3f', vertexes[4]),
-                               tex_coords)  # bottom
-
-        self.gl.stuffBatch.add(4, mode, self.textures[stg], ('v3f', vertexes[5]),
-                               tex_coords)  # top
-
-    def destroy(self, blockName, blockByVec):
+    def destroy(self, blockName, blockByVec, dt):
         if self.destroyStage == -1 or blockByVec[0] != self.destroyPos:
             self.destroyStage = 0
             self.destroyPos = blockByVec[0]
 
         if blockName != "bedrock":
+            # Hardness per stage (in seconds per stage, total time = hardness * 10)
             hardness = {
-                "grass": 0.2,
-                "dirt": 0.2,
-                "gravel": 0.2,
-                "sand": 0.15,
-                "sandstone": 0.15,
-                "leaves_oak": 0.25,
-                "log_oak": 0.25,
-                "stone": 0.05,
-                "cobblestone": 0.04,
+                "grass": 0.02,
+                "dirt": 0.02,
+                "gravel": 0.02,
+                "sand": 0.015,
+                "sandstone": 0.015,
+                "leaves_oak": 0.025,
+                "log_oak": 0.025,
+                "stone": 0.115,       # 1.15 seconds with wooden pick
+                "cobblestone": 0.1,   # 1.0 seconds
             }
-            self.destroyStage += hardness.get(blockName, 1.0)
+            increment = hardness.get(blockName, 0.1) * dt * 10
+            self.destroyStage += increment
 
         if self.destroyStage > 9:
             self.destroyStage = -1

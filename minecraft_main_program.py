@@ -5,6 +5,7 @@ import math
 import os
 import pickle
 import sys
+import time
 from random import randint
 import pygame.time
 import pyglet
@@ -34,14 +35,10 @@ logging.basicConfig(
 )
 
 lang_choose = ["en", "zh"]
-
 pyglet.options['debug_gl'] = False
-
 
 def log_deb(msg):
     logging.debug(msg)
-    #print(msg)
-
 
 def choose_langs():
     global lang_choose, mainFunction, translations
@@ -54,13 +51,10 @@ def choose_langs():
         pyglet.font.add_file('gui/MinecraftAE.ttf')
     else:
         pyglet.font.add_file('gui/main.ttf')
-
     with open("gui/lang.mclanguage", "w") as mclanguagefile:
         mclanguagefile.write(settings.current_language)
-
     if hasattr(gui, 'GUI_TEXTURES'):
         gui.GUI_TEXTURES = gui.GUI_TEXTURES
-
 
 def respawn():
     log_deb("respawning...")
@@ -78,7 +72,6 @@ def respawn():
         player.position = scene.startPlayerPos
         player.lastPlayerPosOnGround = scene.startPlayerPos
 
-
 def saveWorld(worldGen, save_path):
     blocks = worldGen.blocks
     try:
@@ -89,7 +82,6 @@ def saveWorld(worldGen, save_path):
         logging.warning(f"WARNING: {error_msg}")
         print(f"WARNING: {error_msg} please check the log file")
     print("Successfully saved world ")
-
 
 def quit_to_menu():
     log_deb("quitting to menu...")
@@ -125,26 +117,21 @@ def quit_to_menu():
     gc.collect()
     mainFunction = draw_main_menu
 
-
 def show_settings():
     global mainFunction
     mainFunction = draw_settings_menu
-
 
 def edit_panorama():
     global mainFunction
     mainFunction = draw_panorama_menu
 
-
 def draw_command_function():
     global mainFunction
     mainFunction = draw_command
 
-
 def close_settings():
     global mainFunction
     mainFunction = draw_main_menu
-
 
 def start_new_game():
     log_deb("starting new game, hang on tight!")
@@ -157,7 +144,6 @@ def start_new_game():
     scene.worldGen = worldGenerator(scene, translateSeed(seedEditArea.text))
     mainFunction = gen_world
 
-
 def pause():
     log_deb("pausing")
     global PAUSE, mainFunction
@@ -166,14 +152,12 @@ def pause():
     scene.allowEvents["keyboardAndMouse"] = True
     mainFunction = pause_menu
 
-
 def death_screen():
     global PAUSE, mainFunction
     PAUSE = not PAUSE
     scene.allowEvents["movePlayer"] = True
     scene.allowEvents["keyboardAndMouse"] = True
     mainFunction = draw_death_screen
-
 
 def draw_command(mc):
     scene.set2d()
@@ -184,7 +168,6 @@ def draw_command(mc):
     commandEditArea.update(mp, mc, _keys)
     pygame.display.flip()
     clock.tick(MAX_FPS)
-
 
 def draw_panorama_menu(mc):
     def cpt_16x():
@@ -247,12 +230,9 @@ def draw_panorama_menu(mc):
     closeSettingsButton.y = scene.HEIGHT // 2 - (closeSettingsButton.button.height // 2) + 180
     closeSettingsButton.update(mp, mc)
     pygame.display.flip()
-    # clock.tick(MAX_FPS)
-
 
 def draw_settings_menu(mc):
     scene.set2d()
-
     tex = gui.GUI_TEXTURES["options_background"]
     tex2 = gui.GUI_TEXTURES["black"]
     for ix in range(0, scene.WIDTH, tex.width):
@@ -261,41 +241,34 @@ def draw_settings_menu(mc):
             tex2.blit(ix, iy)
     mp = pygame.mouse.get_pos()
 
-    # Volume slider box
     soundVolumeSliderBox.x = scene.WIDTH // 2 - (soundVolumeSliderBox.bg.width // 2) - 170
     soundVolumeSliderBox.y = scene.HEIGHT // 2 - (soundVolumeSliderBox.bg.height // 2) - 180
     soundVolumeSliderBox.update(mp)
-    #
 
-    # Seed edit area
     seedEditArea.x = scene.WIDTH // 2 - (seedEditArea.bg.width // 2) - 170
     seedEditArea.y = scene.HEIGHT // 2 - (seedEditArea.bg.height // 2) - 130
     seedEditArea.update(mp, mc, keys)
-    #
+
     editPanoramaButton = Button(scene, translations['ed.pano'], 0, 0, text_x=scene.WIDTH // 2 - (400 // 2))
     editPanoramaButton.setEvent(edit_panorama)
     editPanoramaButton.x = scene.WIDTH // 2 - (editPanoramaButton.button.width // 2) - 170
     editPanoramaButton.y = scene.HEIGHT // 2 - (editPanoramaButton.button.height // 2) - 80
     editPanoramaButton.update(mp, mc)
 
-    # Close
     closeSettingsButton.x = scene.WIDTH // 2 - (closeSettingsButton.button.width // 2)
     closeSettingsButton.y = scene.HEIGHT // 2 - (closeSettingsButton.button.height // 2) + 160
     closeSettingsButton.update(mp, mc)
-    # language button
+
     lang_button = Button(scene, translations["gui.lang"], 0, 0, text_x=scene.WIDTH // 2 - (400 // 2))
     lang_button.setEvent(choose_langs)
     lang_button.x = scene.WIDTH // 2 - (lang_button.button.width // 2) - 170
     lang_button.y = scene.HEIGHT // 2 - (lang_button.button.height // 2) - 30
     lang_button.update(mp, mc)
-    #
 
     sound.musicPlayer.set_volume(soundVolumeSliderBox.val / 100)
     sound.volume = soundVolumeSliderBox.val / 100
 
     pygame.display.flip()
-    # clock.tick(MAX_FPS)
-
 
 def draw_death_screen(mc):
     scene.set2d()
@@ -303,29 +276,18 @@ def draw_death_screen(mc):
     bg.width = scene.WIDTH
     bg.height = scene.HEIGHT
     bg.blit(0, 0)
-
     mp = pygame.mouse.get_pos()
-
     drawInfoLabel(scene, translations["player dead"], xx=scene.WIDTH // 2,
                   yy=scene.HEIGHT - scene.HEIGHT // 4, style=[('', '')],
                   size=34, anchor_x='center')
-
-    # Back to Game button
     respawnButton.x = scene.WIDTH // 2 - (respawnButton.button.width // 2)
     respawnButton.y = scene.HEIGHT // 2 - (respawnButton.button.height // 2) - 50
     respawnButton.update(mp, mc)
-    #
-
-    # Quit to title button
     quitWorldButton.text = translations["death.titlescreen"]
     quitWorldButton.x = scene.WIDTH // 2 - (quitButton.button.width // 2)
     quitWorldButton.y = scene.HEIGHT // 2 - (quitButton.button.height // 2)
     quitWorldButton.update(mp, mc)
-    #
-
     pygame.display.flip()
-    # clock.tick(MAX_FPS)
-
 
 def pause_menu(mc):
     scene.set2d()
@@ -333,92 +295,62 @@ def pause_menu(mc):
     bg.width = scene.WIDTH
     bg.height = scene.HEIGHT
     bg.blit(0, 0)
-
     mp = pygame.mouse.get_pos()
-
     drawInfoLabel(scene, translations["game.menu"], xx=scene.WIDTH // 2, yy=scene.HEIGHT - scene.HEIGHT // 4,
-                  style=[('', '')],
-                  size=12, anchor_x='center')
-
-    # Back to Game button
+                  style=[('', '')], size=12, anchor_x='center')
     resumeButton.x = scene.WIDTH // 2 - (resumeButton.button.width // 2)
     resumeButton.y = scene.HEIGHT // 2 - (resumeButton.button.height // 2) - 50
     resumeButton.update(mp, mc)
-    #
-
-    # Quit to title button
     quitWorldButton.text = translations["quit.title"]
     quitWorldButton.x = scene.WIDTH // 2 - (quitButton.button.width // 2)
     quitWorldButton.y = scene.HEIGHT // 2 - (quitButton.button.height // 2)
     quitWorldButton.update(mp, mc)
-    #
-
     pygame.display.flip()
-    # clock.tick(MAX_FPS)
-
 
 def gen_world(mc):
     global IN_MENU, PAUSE, resizeEvent
     chunk_cnt = 220
-
     tex = gui.GUI_TEXTURES["options_background"]
     tex2 = gui.GUI_TEXTURES["black"]
     for ix in range(0, scene.WIDTH, tex.width):
         for iy in range(0, scene.HEIGHT, tex.height):
             tex.blit(ix, iy)
             tex2.blit(ix, iy)
-
     scene.genWorld()
     if scene.worldGen.start - len(scene.worldGen.queue) > chunk_cnt:
         scene.genTime = 16
         IN_MENU = False
         PAUSE = False
-
     proc = round((scene.worldGen.start - len(scene.worldGen.queue)) * 100 / chunk_cnt)
     drawInfoLabel(scene, translations["load.world"], xx=scene.WIDTH // 2, yy=scene.HEIGHT // 2, style=[('', '')],
                   size=12, anchor_x='center')
     drawInfoLabel(scene, translations["gen.terrain"] + f" {proc}%...", xx=scene.WIDTH // 2, yy=scene.HEIGHT // 2 - 39,
                   style=[('', '')], size=12, anchor_x='center')
-
     pygame.display.flip()
-    # clock.tick(MAX_FPS)
-
 
 def draw_main_menu(mc):
     global mainMenuRotation, IN_MENU, PAUSE
     glFogfv(GL_FOG_COLOR, (GLfloat * 4)(0.5, 0.7, 1, 1))
     glFogf(GL_FOG_START, 0)
     glFogf(GL_FOG_END, 1000)
-
     scene.set3d()
-
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
     glLoadIdentity()
-
     glPushMatrix()
     glRotatef(mainMenuRotation[0], 1, 0, 0)
     glRotatef(mainMenuRotation[1], 0, 1, 0)
     glTranslatef(0, 0, 0)
-
     scene.draw()
     scene.drawPanorama()
-
     glPopMatrix()
     scene.set2d()
     mp = pygame.mouse.get_pos()
-
     tex = gui.GUI_TEXTURES["game_logo"]
     tex.blit(scene.WIDTH // 2 - (tex.width // 2), scene.HEIGHT - tex.height - (scene.HEIGHT // 15))
-
     drawInfoLabel(scene, f"Minecraft {MC_VERSION}", xx=10, yy=10, style=[('', '')], size=12)
-
-    # Single player button
     singleplayer_button.x = scene.WIDTH // 2 - (singleplayer_button.button.width // 2)
     singleplayer_button.y = scene.HEIGHT // 2 - (singleplayer_button.button.height // 2) - 25
     singleplayer_button.update(mp, mc)
-    #
-
-    # Options button
     optionsButton = Button(scene, translations["options"], 0, 0, button=gui.GUI_TEXTURES["button_bg_half"],
                            button_hovered=gui.GUI_TEXTURES["button_bg_hover_half"],
                            text_x=scene.WIDTH // 2 - (200 // 2))
@@ -426,9 +358,6 @@ def draw_main_menu(mc):
     optionsButton.x = scene.WIDTH // 2 - (optionsButton.button.width // 2) - 100
     optionsButton.y = scene.HEIGHT // 2 - (optionsButton.button.height // 2) + 125
     optionsButton.update(mp, mc)
-    #
-
-    # Quit button
     quitButton_ = Button(scene, translations["quit_game"], 0, 0, button=gui.GUI_TEXTURES["button_bg_half"],
                          button_hovered=gui.GUI_TEXTURES["button_bg_hover_half"],
                          text_x=scene.WIDTH // 2 - (200 // 2) + 200)
@@ -436,12 +365,9 @@ def draw_main_menu(mc):
     quitButton_.x = scene.WIDTH // 2 - (quitButton_.button.width // 2) + 100
     quitButton_.y = scene.HEIGHT // 2 - (quitButton_.button.height // 2) + 125
     quitButton_.update(mp, mc)
-    # lang_bb
     lang_bb.x = scene.WIDTH // 2 - (optionsButton.button.width // 2) - 140
     lang_bb.y = scene.HEIGHT // 2 - (lang_bb.button.height // 2) + 125
     lang_bb.update(mp, mc)
-
-    # Splash
     glPushMatrix()
     glTranslatef((scene.WIDTH // 2 + (tex.width // 2)) - 90, scene.HEIGHT - tex.height - (scene.HEIGHT // 15) + 15, 0.0)
     glRotatef(20.0, 0.0, 0.0, 1.0)
@@ -450,24 +376,10 @@ def draw_main_menu(mc):
     drawInfoLabel(scene, splash, xx=1, yy=1, style=[('', '')], scale=var8, size=30, anchor_x='center',
                   label_color=(255, 255, 0), shadow_color=(63, 63, 0))
     glPopMatrix()
-    #
-
     pygame.display.flip()
-    # clock.tick(MAX_FPS)
     mainMenuRotation[0] = 0
-    # if mainMenuRotation[0] < 75:
-    #     mainMenuRotation[2] = False
-    # if mainMenuRotation[0] > 25:
-    #     mainMenuRotation[2] = True
-
-    # if mainMenuRotation[2]:
-    #     mainMenuRotation[0] -= 0.08
-    # else:
-    #     mainMenuRotation[0] += 0.08
     mainMenuRotation[1] += 0.035
     pyglet.gl.glViewport(0, 0, WIDTH, HEIGHT)
-    # gc.collect()
-
 
 if settings.DEBUG:
     log_deb(f"PyOpenGL version: {OpenGL.__version__}")
@@ -498,20 +410,15 @@ LAST_SAVED_RESOLUTION = [WIDTH, HEIGHT]
 pygame.mixer.pre_init(44100, 16, 2, 4096)
 screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.DOUBLEBUF | pygame.OPENGL | pygame.RESIZABLE, vsync=1)
 
-# Loading screen
 glClearColor(1, 1, 1, 1)
-
 glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
 glLoadIdentity()
-
 glMatrixMode(GL_PROJECTION)
 glLoadIdentity()
 gluOrtho2D(0, WIDTH, 0, HEIGHT)
-
 logo = pyglet.resource.image("gui/mojang_studios.jpg")
 logo.blit(WIDTH // 2 - (logo.width // 2), HEIGHT // 2 - (logo.height // 2))
 pygame.display.flip()
-#
 
 sound = Sound()
 scene = Scene()
@@ -539,10 +446,8 @@ sound.BLOCKS_SOUND["step"] = {}
 for e, i in enumerate(os.listdir("sounds/step/")):
     soundName = i.split(".")[0][:-1]
     soundNum = i.split(".")[0][-1]
-
     if soundName not in sound.BLOCKS_SOUND["step"]:
         sound.BLOCKS_SOUND["step"][soundName] = []
-
     sound.BLOCKS_SOUND["step"][soundName].append(pygame.mixer.Sound("sounds/step/" + i))
     print("Successful loaded", soundName, "#" + soundNum, "sound!")
 
@@ -551,20 +456,16 @@ sound.BLOCKS_SOUND["dig"] = {}
 for e, i in enumerate(os.listdir("sounds/dig/")):
     soundName = i.split(".")[0][:-1]
     soundNum = i.split(".")[0][-1]
-
     if soundName not in sound.BLOCKS_SOUND["dig"]:
         sound.BLOCKS_SOUND["dig"][soundName] = []
-
     sound.BLOCKS_SOUND["dig"][soundName].append(pygame.mixer.Sound("sounds/dig/" + i))
     print("Successful loaded", soundName, "#" + soundNum, "sound!")
 
 print("Loading explode sounds...")
 sound.BLOCKS_SOUND["explode"] = []
-for e, i in enumerate(os.listdir("sounds/expl"
-                                 "ode/")):
+for e, i in enumerate(os.listdir("sounds/explode/")):
     soundName = i.split(".")[0][:-1]
     soundNum = i.split(".")[0][-1]
-
     sound.BLOCKS_SOUND["explode"].append(pygame.mixer.Sound("sounds/explode/" + i))
     print("Successful loaded", soundName, "#" + soundNum, "sound!")
 
@@ -573,10 +474,8 @@ sound.SOUNDS["damage"] = {}
 for e, i in enumerate(os.listdir("sounds/damage/")):
     soundName = i.split(".")[0][:-1]
     soundNum = i.split(".")[0][-1]
-
     if soundName not in sound.SOUNDS["damage"]:
         sound.SOUNDS["damage"][soundName] = []
-
     sound.SOUNDS["damage"][soundName].append(pygame.mixer.Sound("sounds/damage/" + i))
     print("Successful loaded", soundName, "#" + soundNum, "sound!")
 
@@ -585,10 +484,8 @@ sound.SOUNDS["GUI"] = {}
 for e, i in enumerate(os.listdir("sounds/gui/")):
     soundName = i.split(".")[0][:-1]
     soundNum = i.split(".")[0][-1]
-
     if soundName not in sound.SOUNDS["GUI"]:
         sound.SOUNDS["GUI"][soundName] = []
-
     sound.SOUNDS["GUI"][soundName].append(pygame.mixer.Sound("sounds/gui/" + i))
     print("Successful loaded", soundName, "#" + soundNum, "sound!")
 
@@ -602,7 +499,6 @@ for e, i in enumerate(os.listdir("sounds/music/game")):
     sound.MUSIC.append("sounds/music/game/" + i)
     print("Successful loaded", i, "music!")
 sound.initMusic(False)
-
 print("Music loaded successful!")
 
 print("Loading GUI textures...")
@@ -670,23 +566,17 @@ splfile.close()
 sound.musicPlayer.play()
 sound.musicPlayer.set_volume(sound.volume)
 
-# Main menu buttons
 singleplayer_button = Button(scene, translations["singleplayer"], 0, 0)
-
 quitButton = Button(scene, translations["quit_game"], 0, 0)
 lang_bb = Button(scene, "", 0, 0, button=gui.GUI_TEXTURES['language'],
                  button_hovered=gui.GUI_TEXTURES['language_hover'])
 singleplayer_button.setEvent(start_new_game)
 quitButton.setEvent(exit)
 
-#
-
-# Settings objects
 closeSettingsButton = Button(scene, "Close", 0, 0)
 soundVolumeSliderBox = Sliderbox(scene, translations["sound.volume"], 100, 0, 0)
 seedEditArea = Editarea(scene, translations["World.Seed"], 0, 0)
 commandEditArea = Editarea(scene, "Commands input here", 0, 0)
-
 
 def process_command(command):
     if command.strip() == "/clear":
@@ -694,40 +584,42 @@ def process_command(command):
     elif command.strip() == "/exit":
         exit()
 
-
 commandEditArea.setEvent(process_command)
 closeSettingsButton.setEvent(close_settings)
-#
 
-# Pause menu buttons
 resumeButton = Button(scene, translations["backgame"], 0, 0)
 quitWorldButton = Button(scene, translations["gui.qtt"], 0, 0)
-
 resumeButton.setEvent(pause)
 quitWorldButton.setEvent(quit_to_menu)
-#
 
-# Death screen buttons
 respawnButton = Button(scene, translations["respawn"], 0, 0)
 respawnButton.setEvent(respawn)
-#
 
 print("Loading complete!")
 mainMenuRotation = [50, 180, True]
-
 mainFunction = draw_main_menu
 
+# Delta time variables
+last_time = time.time()
+
 while True:
+    # Calculate delta time
+    current_time = time.time()
+    dt = current_time - last_time
+    last_time = current_time
+    # Clamp dt to avoid physics explosion if game freezes
+    if dt > 0.05:
+        dt = 0.05
+
     pyglet.options['debug_gl'] = False
     pygame.display.set_caption(f"Minecraft {MC_VERSION} {clock.get_fps()}")
     if scene.allowEvents["keyboardAndMouse"] and not PAUSE:
         if pygame.mouse.get_pressed(3)[0]:
-            player.mouseEvent(1)
+            player.mouseEvent(1, dt)
     mbclicked = None
     keys = []
 
     for event in pygame.event.get():
-
         if event.type == pygame.MOUSEMOTION:
             x, y = pygame.mouse.get_rel()
             player.rotation[0] += y
@@ -748,7 +640,6 @@ while True:
             if event.key == pygame.K_F11:
                 if scene.WIDTH != monitor.current_w or scene.HEIGHT != monitor.current_h:
                     LAST_SAVED_RESOLUTION = [scene.WIDTH, scene.HEIGHT]
-
                     WIDTH = monitor.current_w
                     HEIGHT = monitor.current_h
                     screen = pygame.display.set_mode((monitor.current_w, monitor.current_h),
@@ -804,7 +695,7 @@ while True:
                         if player.cameraType > 3:
                             player.cameraType = 1
                 if event.type == pygame.MOUSEBUTTONDOWN:
-                    player.mouseEvent(event.button)
+                    player.mouseEvent(event.button, dt)
                     if event.button == 4:
                         player.inventory.activeInventory -= 1
                         if player.inventory.activeInventory < 0:
@@ -819,10 +710,10 @@ while True:
                             gui.showText(player.inventory.inventory[player.inventory.activeInventory][0])
                 else:
                     if pygame.mouse.get_pressed(3)[0]:
-                        player.mouseEvent(1)
+                        player.mouseEvent(1, dt)
                     else:
-                        player.mouseEvent(-1)
-            # clock.tick(MAX_FPS)
+                        player.mouseEvent(-1, dt)
+
     if scene.allowEvents["grabMouse"]:
         pygame.mouse.set_visible(PAUSE)
     else:
@@ -833,30 +724,28 @@ while True:
 
     if not PAUSE:
         sound.playMusic()
-
         if scene.allowEvents["showCrosshair"]:
             gui.shows["crosshair"][1] = (scene.WIDTH // 2 - 9, scene.HEIGHT // 2 - 9)
         else:
             gui.shows["crosshair"][1] = (-100, -100)
         if scene.allowEvents["grabMouse"] and pygame.mouse.get_focused():
             pygame.mouse.set_pos((scene.WIDTH // 2, scene.HEIGHT // 2))
-        scene.updateScene()
-
+        scene.updateScene(dt)
         player.inventory.draw()
         gui.update()
 
         if showInfoLabel:
-            infolbl = drawInfoLabel(scene, f"Minecraft {MC_VERSION} ({MC_VERSION}/vanilla)\n"
-                                           f"s fps\n"
-                                           f"XYZ: {round(player.x(), 3)} / {round(player.y(), 5)} / {round(player.z(), 3)}\n"
-                                           f"Block: {round(player.x())} / {round(player.y())} / {round(player.z())}\n"
-                                           f"Facing: {player.rotation[1]} / {player.rotation[0]}\n"
-                                           f"Biome: {getBiomeByTemp(scene.worldGen.perlinBiomes(player.x(), player.z()) * 3)}\n"
-                                           f"Looking at: {scene.lookingAt}\n"
-                                           f"Count of chunks: {scene.worldGen.start - len(scene.worldGen.queue)} "
-                                           f"({scene.worldGen.start})",
-                                    shadow=False, label_color=(224, 224, 224), xx=scene.WIDTH // 2, yy=scene.HEIGHT // 2,
-                  style=[('', '')], size=12, anchor_x='center')
+            drawInfoLabel(scene, f"Minecraft {MC_VERSION} ({MC_VERSION}/vanilla)\n"
+                                 f"s fps\n"
+                                 f"XYZ: {round(player.x(), 3)} / {round(player.y(), 5)} / {round(player.z(), 3)}\n"
+                                 f"Block: {round(player.x())} / {round(player.y())} / {round(player.z())}\n"
+                                 f"Facing: {player.rotation[1]} / {player.rotation[0]}\n"
+                                 f"Biome: {getBiomeByTemp(scene.worldGen.perlinBiomes(player.x(), player.z()) * 3)}\n"
+                                 f"Looking at: {scene.lookingAt}\n"
+                                 f"Count of chunks: {scene.worldGen.start - len(scene.worldGen.queue)} "
+                                 f"({scene.worldGen.start})",
+                          shadow=False, label_color=(224, 224, 224), xx=scene.WIDTH // 2, yy=scene.HEIGHT // 2,
+                          style=[('', '')], size=12, anchor_x='center')
         pygame.display.flip()
         clock.tick(MAX_FPS)
     elif PAUSE and not IN_MENU:
@@ -866,10 +755,7 @@ while True:
             gui.shows["crosshair"][1] = (scene.WIDTH // 2 - 9, scene.HEIGHT // 2 - 9)
         else:
             gui.shows["crosshair"][1] = (-100, -100)
-        scene.updateScene()
-
+        scene.updateScene(dt)
         player.inventory.draw()
         gui.update()
-
         mainFunction(mbclicked)
-        # clock.tick(MAX_FPS)

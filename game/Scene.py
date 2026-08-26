@@ -1,6 +1,5 @@
 import gc
 import threading
-
 import pyglet.image
 from OpenGL.GLU import *
 from pyglet.gl import *
@@ -16,7 +15,6 @@ from game.world.Clouds import Clouds
 from game.world.worldGenerator import worldGenerator
 from game.blocks.CubeHandler import CubeHandler
 import logging
-
 
 class Scene:
     def __init__(self):
@@ -39,7 +37,7 @@ class Scene:
         self.fov = FOV
         self.updateEvents = []
         self.entity = []
-        self.skyColor = [128, 179, 255]  # [64, 89, 150]
+        self.skyColor = [128, 179, 255]
         self.panorama = {}
         self.zombie_head_texture = {}
         self.in_water = False
@@ -105,7 +103,6 @@ class Scene:
     def loadZombieLegTextures(self):
         for e, i in enumerate(os.listdir("textures/zombie_leg")):
             __secret_texture = pyglet.image.load("textures/zombie_leg/" + i).get_texture()
-            __secret_flipped_texture = __secret_texture.get_texture().get_transform(flip_x=True)
             self.zombie_leg_texture[e] = \
                 pyglet.graphics.TextureGroup(__secret_texture)
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
@@ -198,11 +195,8 @@ class Scene:
         pass
 
     def drawPanorama(self):
-        # self.resizeCGL(256, 256, changeRes=False)
-
         pp = self.player.position
         sx, sy, sz = 60, 60, 60
-
         x, y, z = pp[0] - (sx // 2), -(sy // 2), pp[2] - (sz // 2)
         X, Y, Z = x + sx, y + sy, z + sz
 
@@ -217,24 +211,12 @@ class Scene:
 
         tex_coords = ('t2f', (0, 0, 1, 0, 1, 1, 0, 1))
         mode = GL_QUADS
-        self.stuffBatch.add(4, mode, self.panorama[2], ('v3f', vertexes[0]),
-                            tex_coords)  # back
-        self.stuffBatch.add(4, mode, self.panorama[0], ('v3f', vertexes[1]),
-                            tex_coords)  # front
-
-        self.stuffBatch.add(4, mode, self.panorama[3], ('v3f', vertexes[2]),
-                            tex_coords)  # left
-        self.stuffBatch.add(4, mode, self.panorama[1], ('v3f', vertexes[3]),
-                            tex_coords)  # right
-
-        self.stuffBatch.add(4, mode, self.panorama[5], ('v3f', vertexes[4]),
-                            tex_coords)  # bottom
-
-        self.stuffBatch.add(4, mode, self.panorama[4], ('v3f', vertexes[5]),
-                            tex_coords)  # top
-
-        # glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, 256, 256)
-        # self.resizeCGL(self.WIDTH, self.HEIGHT, changeRes=False)
+        self.stuffBatch.add(4, mode, self.panorama[2], ('v3f', vertexes[0]), tex_coords)
+        self.stuffBatch.add(4, mode, self.panorama[0], ('v3f', vertexes[1]), tex_coords)
+        self.stuffBatch.add(4, mode, self.panorama[3], ('v3f', vertexes[2]), tex_coords)
+        self.stuffBatch.add(4, mode, self.panorama[1], ('v3f', vertexes[3]), tex_coords)
+        self.stuffBatch.add(4, mode, self.panorama[5], ('v3f', vertexes[4]), tex_coords)
+        self.stuffBatch.add(4, mode, self.panorama[4], ('v3f', vertexes[5]), tex_coords)
 
     def genWorld(self):
         self.drawCounter += 1
@@ -242,8 +224,7 @@ class Scene:
             self.drawCounter = 0
         self.worldGen.genChunk(self.player, max_chunks_per_call=8, max_blocks_per_call=256)
 
-    def updateScene(self):
-
+    def updateScene(self, dt):
         self.genWorld()
         if self.in_water:
             glFogfv(GL_FOG_COLOR, (GLfloat * 4)(0, 0, 0, 1))
@@ -256,32 +237,29 @@ class Scene:
 
         self.set3d()
         glClearColor(self.skyColor[0] / 255, self.skyColor[1] / 255, self.skyColor[2] / 255, 1)
-
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
         glLoadIdentity()
 
-        self.player.update()
+        self.player.update(dt)
         self.draw()
 
-        self.clouds.update()
-        self.droppedBlock.update()
+        self.clouds.update(dt)
+        self.droppedBlock.update(dt)
 
         for i in self.entity:
-            i.update()
+            i.update(dt)
 
-        self.particles.drawParticles()
+        self.particles.drawParticles(dt)
         self.light.update()
 
         blockByVec = self.cubes.hitTest(self.player.position, self.player.get_sight_vector())
         if blockByVec[0]:
             self.destroy.drawDestroy(*blockByVec[0])
-
             glPolygonMode(GL_FRONT_AND_BACK, GL_LINE)
             glColor3d(0, 0, 0)
             pyglet.graphics.draw(24, GL_QUADS, ('v3f/static', flatten(cube_vertices(blockByVec[0], 0.51))))
             glPolygonMode(GL_FRONT_AND_BACK, GL_FILL)
             glColor3d(1, 1, 1)
-
             self.lookingAt = f"{blockByVec[0][0]} {blockByVec[0][1]} {blockByVec[0][2]} " \
                              f"({self.cubes.cubes[blockByVec[0]].name})"
         else:

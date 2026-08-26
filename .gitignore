@@ -9,3 +9,4 @@ aldiskdagda
 *.pyc
 /__pycache__
 /saves
+*.pyc

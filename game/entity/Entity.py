@@ -1,7 +1,6 @@
 from game.models.Model import Model
 from functions import roundPos
 
-
 class Entity:
     def __init__(self, gl):
         self.shift = 0
@@ -19,17 +18,18 @@ class Entity:
         self.playerFallY = 0
         self.kW, self.kS, self.kA, self.kD = 0, 0, 0, 0
         self.gl.allowEvents["collisions"] = True
-        self.speed = 0.02
+        self.speed = 0.02  # meters per second (for zombies)
         self.model = Model(gl)
 
-    def update(self):
+    def update(self, dt):
         self.model.drawModel(self.position, self.rotation)
-        self.update_pos()
+        self.update_pos(dt)
 
-    def update_pos(self):
+    def update_pos(self, dt):
         DX, DY, DZ = 0, 0, 0
-        dt = self.speed
+        # No movement by default – override in subclasses
         self.position = [self.position[0] + DX, self.position[1] + DY, self.position[2] + DZ]
+        # Gravity and collision are applied in subclasses if needed
         if dt < 0.2:
             dt /= 10
             DX /= 10
@@ -52,7 +52,7 @@ class Entity:
         self.canShake = self.position[1] == col[1]
         if self.position[0] != col[0] or self.position[2] != col[2]:
             if col2 in self.gl.cubes.cubes and self.shift <= 0:
-                self.gl.blockSound.playStepSound(self.gl.cubes.cubes[col2].name)
+                self.gl.blockSound.playStepSound(self.gl.cubes.cubes[col2].name, custom=15)
         if not self.bInAir:
             for i in range(1, 6):
                 col21 = roundPos((col[0], col[1] - i, col[2]))

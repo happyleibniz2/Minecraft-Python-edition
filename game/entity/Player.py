@@ -1,14 +1,11 @@
 import math
 from random import randint
-
 import pyglet
 from OpenGL.GL import *
-
 from game.blocks.BlockEvent import *
 from functions import roundPos
 from game.blocks.DestroyBlock import DestroyBlock
 from settings import *
-
 
 class Player:
     def __init__(self, x=0, y=0, z=0, rotation=None, gl=None):
@@ -17,10 +14,10 @@ class Player:
         print("Init Player class...")
         self.is_spectator = False
         self.position, self.rotation = [x, y, z], rotation
-        self.speed = 0.12 # controlls the speed of the player
+        self.speed = 4.0  # meters per second
         self.gl = gl
         self.gl.allowEvents.setdefault("collisions", True)
-        self.gravity = 5.8
+        self.gravity = 5.8  # meters per second²
         self.tVel = 50
         self.dy = 0
         self.shift = 0
@@ -46,16 +43,16 @@ class Player:
         fps = max(MAX_FPS, 30)
         return min(max(1.0 / fps, 0.016), 0.05)
 
-    def setCameraShake(self):
+    def setCameraShake(self, dt):
         if not self.canShake or self.shift > 0:
             return
 
         if not self.cameraShake[1]:
-            self.cameraShake[0] -= 0.007
+            self.cameraShake[0] -= 0.007 * dt * 60  # normalized to 60 fps
             if self.cameraShake[0] < -0.1:
                 self.cameraShake[1] = True
         else:
-            self.cameraShake[0] += 0.007
+            self.cameraShake[0] += 0.007 * dt * 60
             if self.cameraShake[0] > 0.1:
                 self.cameraShake[1] = False
 
@@ -67,7 +64,7 @@ class Player:
             if self.shift > 0:
                 self.shift -= 0.05
 
-    def updatePosition(self):
+    def updatePosition(self, dt):
         if pygame.key.get_pressed()[pygame.K_p]:
             self.is_spectator = not self.is_spectator
         if pygame.key.get_pressed()[pygame.K_l]:
@@ -95,12 +92,9 @@ class Player:
                 self.rotation[0] = -90
 
             DX, DY, DZ = 0, 0, 0
-            minKd = 0.08
+            minKd = 0.08 * dt * 60  # scale with dt
 
             rotY = self.rotation[1] / 180 * math.pi
-            dx, dz = (self.speed + self.acceleration - 0.008) * math.sin(rotY), \
-                     (self.speed + self.acceleration - 0.008) * math.cos(rotY)
-
             key = pygame.key.get_pressed()
             if not key[pygame.K_w]:
                 self.kW = 0
@@ -122,45 +116,43 @@ class Player:
                 move_input += 1
 
             if move_input:
-                self.current_move_speed = min(self.current_move_speed + 0.035, self.speed)
+                self.current_move_speed = min(self.current_move_speed + 0.035 * dt * 60, self.speed)
             else:
-                self.current_move_speed = max(self.current_move_speed - 0.065, 0.0)
+                self.current_move_speed = max(self.current_move_speed - 0.065 * dt * 60, 0.0)
 
             if key[pygame.K_LCTRL]:
-                self.acceleration = 0.009
-            if self.kW > 0 or key[pygame.K_w]:
-                DX += self.current_move_speed * math.sin(rotY)
-                DZ -= self.current_move_speed * math.cos(rotY)
-                self.setCameraShake()
-                if self.kW > 0:
-                    self.kW -= minKd
+                self.acceleration = 0.009 * dt * 60
             else:
                 self.acceleration = 0
+
+            if self.kW > 0 or key[pygame.K_w]:
+                DX += self.current_move_speed * math.sin(rotY) * dt
+                DZ -= self.current_move_speed * math.cos(rotY) * dt
+                self.setCameraShake(dt)
+                if self.kW > 0:
+                    self.kW -= minKd
             if self.kS > 0 or key[pygame.K_s]:
-                DX -= self.current_move_speed * math.sin(rotY)
-                DZ += self.current_move_speed * math.cos(rotY)
-                self.setCameraShake()
-                self.acceleration = 0
+                DX -= self.current_move_speed * math.sin(rotY) * dt
+                DZ += self.current_move_speed * math.cos(rotY) * dt
+                self.setCameraShake(dt)
                 if self.kS > 0:
                     self.kS -= minKd
             if self.kA > 0 or key[pygame.K_a]:
-                DX -= self.current_move_speed * math.cos(rotY)
-                DZ -= self.current_move_speed * math.sin(rotY)
-                self.setCameraShake()
-                self.acceleration = 0
+                DX -= self.current_move_speed * math.cos(rotY) * dt
+                DZ -= self.current_move_speed * math.sin(rotY) * dt
+                self.setCameraShake(dt)
                 if self.kA > 0:
                     self.kA -= minKd
             if self.kD > 0 or key[pygame.K_d]:
-                DX += self.current_move_speed * math.cos(rotY)
-                DZ += self.current_move_speed * math.sin(rotY)
-                self.setCameraShake()
-                self.acceleration = 0
+                DX += self.current_move_speed * math.cos(rotY) * dt
+                DZ += self.current_move_speed * math.sin(rotY) * dt
+                self.setCameraShake(dt)
                 if self.kD > 0:
                     self.kD -= minKd
+
             if key[pygame.K_SPACE]:
                 if self.is_spectator:
-                    print(self.position[1])
-                    self.position[1] += 0.08
+                    self.position[1] += 0.08 * dt * 60
                 else:
                     if key[pygame.K_w]:
                         self.kW = 2
@@ -171,28 +163,27 @@ class Player:
                     if key[pygame.K_d]:
                         self.kD = 2
                     self.jump()
+
             if key[pygame.K_LSHIFT]:
                 if self.is_spectator:
-                    self.position[1] -= 0.05
+                    self.position[1] -= 0.05 * dt * 60
                 else:
                     self.setShift(True)
-                    self.acceleration = -0.01
+                    self.acceleration = -0.01 * dt * 60
             else:
                 self.setShift(False)
                 self.acceleration = 0
 
-            dt = self.get_physics_dt()
-            self.position = [self.position[0] + DX, self.position[1] + DY, self.position[2] + DZ]
+            # Apply movement with substeps for stability
+            sub_steps = 10
+            sub_dt = dt / sub_steps
+            DX_sub = DX / sub_steps
+            DZ_sub = DZ / sub_steps
+            for _ in range(sub_steps):
+                self.move(sub_dt, DX_sub, 0, DZ_sub)
 
-            if dt < 0.2:
-                dt /= 10
-                DX /= 10
-                DY /= 10
-                DZ /= 10
-                for i in range(10):
-                    self.move(dt, DX, DY, DZ)
         else:
-            self.move(self.get_physics_dt(), 0, 0, 0)
+            self.move(dt, 0, 0, 0)
 
         glPushMatrix()
         glRotatef(self.rotation[0], 1, 0, 0)
@@ -203,14 +194,11 @@ class Player:
 
     def jump(self):
         if not self.dy:
-            self.dy = 5.5
+            self.dy = 5.5  # initial jump velocity
 
     def move(self, dt, dx, dy, dz):
-        dt = self.get_physics_dt()
         if self.is_spectator:
             dt = 0
-        else:
-            pass
         self.dy -= dt * self.gravity
         self.dy = max(self.dy, -self.tVel)
         dy += self.dy * dt
@@ -220,67 +208,67 @@ class Player:
 
         x, y, z = self.position
         if self.is_spectator:
-            pass
+            self.position = [x + dx, y + dy, z + dz]
+            return
+
+        col = self.collide((x + dx, y + dy, z + dz))
+        col2 = roundPos((col[0], col[1] - 2, col[2]))
+        self.canShake = self.position[1] == col[1]
+        if self.position[0] != col[0] or self.position[2] != col[2]:
+            if col2 in self.gl.cubes.cubes and self.shift <= 0:
+                self.gl.blockSound.playStepSound(self.gl.cubes.cubes[col2].name, custom=15)
+
+        # Dynamic FOV
+        if self.position[0] != col[0] or self.position[2] != col[2]:
+            if self.gl.fov < FOV + 20:
+                self.gl.fov += 0.2 * dt * 60
+            else:
+                self.gl.fov = FOV + 20
         else:
-            col = self.collide((x + dx, y + dy, z + dz))
-            col2 = roundPos((col[0], col[1] - 2, col[2]))
-            self.canShake = self.position[1] == col[1]
-            if self.position[0] != col[0] or self.position[2] != col[2]:
-                if col2 in self.gl.cubes.cubes and self.shift <= 0:
-                    self.gl.blockSound.playStepSound(self.gl.cubes.cubes[col2].name)
-            # Dynamic FOV
-            if self.position[0] != col[0] or self.position[2] != col[2]:
-                if self.gl.fov < FOV + 20:
-                    self.gl.fov += 0.2
-                else:
-                    self.gl.fov = FOV + 20
+            if self.gl.fov > FOV:
+                self.gl.fov -= 0.2 * dt * 60
             else:
-                if self.gl.fov > FOV:
-                    self.gl.fov -= 0.2
+                self.gl.fov = FOV
+        self.gl.set3d()
+
+        if not self.bInAir:
+            for i in range(1, 6):
+                col21 = roundPos((col[0], col[1] - i, col[2]))
+                if col21 not in self.gl.cubes.cubes:
+                    self.bInAir = True
+                    if self.playerFallY < col[1]:
+                        self.playerFallY = round(col[1] - self.lastPlayerPosOnGround[1])
                 else:
-                    self.gl.fov = FOV
-            self.gl.set3d()
+                    self.bInAir = False
+                    break
+        else:
+            self.lastPlayerPosOnGround = col
 
-            if not self.bInAir:
-                for i in range(1, 6):
-                    col21 = roundPos((col[0], col[1] - i, col[2]))
-                    if col21 not in self.gl.cubes.cubes:
-                        self.bInAir = True
-                        if self.playerFallY < col[1]:
-                            self.playerFallY = round(col[1] - self.lastPlayerPosOnGround[1])
-                    else:
-                        self.bInAir = False
-                        break
-            else:
-                self.lastPlayerPosOnGround = col
+        if self.bInAir and col2 in self.gl.cubes.cubes:
+            hp = self.hp
+            if 3 < self.playerFallY:
+                self.hp -= 1
+                if self.playerFallY < 10:
+                    self.hp -= 3
+                elif self.playerFallY < 16:
+                    self.hp -= 5
+                elif self.playerFallY < 23:
+                    self.hp -= 8
+                elif self.playerFallY < 30:
+                    self.hp -= 11
+                else:
+                    self.hp = 0
+                self.gl.blockSound.cntr = 99
+                self.gl.blockSound.damageByBlock(self.gl.cubes.cubes[col2].name, self.hp)
+            if self.hp <= 0 and not self.playerDead:
+                self.dead()
 
-            if self.bInAir and col2 in self.gl.cubes.cubes:
-                hp = self.hp
-                if 3 < self.playerFallY:
-                    # self.gl.sound.playSound("oof", 0.8)
-                    self.hp -= 1
-                    if self.playerFallY < 10:
-                        self.hp -= 3
-                    elif self.playerFallY < 16:
-                        self.hp -= 5
-                    elif self.playerFallY < 23:
-                        self.hp -= 8
-                    elif self.playerFallY < 30:
-                        self.hp -= 11
-                    else:
-                        self.hp = 0
-                    self.gl.blockSound.cntr = 99
-                    self.gl.blockSound.damageByBlock(self.gl.cubes.cubes[col2].name, self.hp)
-                if self.hp <= 0 and not self.playerDead:
-                    # Player dead
-                    self.dead()
-
-                self.bInAir = False
-                self.gl.particles.addParticle((col[0], col[1] - 1, col[2]),
-                                              self.gl.cubes.cubes[col2],
-                                              direction="down",
-                                              count=10)
-            self.position = col
+            self.bInAir = False
+            self.gl.particles.addParticle((col[0], col[1] - 1, col[2]),
+                                          self.gl.cubes.cubes[col2],
+                                          direction="down",
+                                          count=10)
+        self.position = col
 
     def dead(self):
         self.playerDead = True
@@ -292,11 +280,11 @@ class Player:
                 ), i[1][0])
             self.inventory.inventory[i[0]] = [i[1][0], 0]
 
-    def mouseEvent(self, button):
+    def mouseEvent(self, button, dt):
         blockByVec = self.gl.cubes.hitTest(self.position, self.get_sight_vector())
 
         if button == 1 and blockByVec[0]:
-            self.gl.destroy.destroy(self.gl.cubes.cubes[blockByVec[0]].name, blockByVec)
+            self.gl.destroy.destroy(self.gl.cubes.cubes[blockByVec[0]].name, blockByVec, dt)
         else:
             self.gl.destroy.destroyStage = -1
 
@@ -341,7 +329,6 @@ class Player:
                 self.hp -= 2
                 self.gl.blockSound.damageByBlock("ahh", 1)
                 if self.hp <= 0:
-                    # Player dead
                     self.dead()
 
         p = list(pos)
@@ -380,5 +367,5 @@ class Player:
     def z(self):
         return self.position[2]
 
-    def update(self):
-        self.updatePosition()
+    def update(self, dt):
+        self.updatePosition(dt)

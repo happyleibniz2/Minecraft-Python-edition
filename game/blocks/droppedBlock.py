@@ -4,7 +4,6 @@ import numpy as np
 import math
 from functions import roundPos
 
-
 class droppedBlock:
     def __init__(self, gl):
         self.gl = gl
@@ -13,10 +12,9 @@ class droppedBlock:
     def addBlock(self, coords, name, dr=True):
         self.blocks[len(self.blocks)] = [coords, name, randint(0, 2) / 10, [0, "-"], 0, dr]
 
-    def update(self):
+    def update(self, dt):
         cpy = self.blocks.copy().items()
         for i in cpy:
-
             pp = list(self.gl.player.position)
             sx, sy, sz = 0.25, 0.25, 0.25
 
@@ -58,7 +56,7 @@ class droppedBlock:
                 [-math.sin(i[1][4]), 0, math.cos(i[1][4]), 1],
                 [0, 0, 0, 1],
             ])
-            i[1][4] += 0.01
+            i[1][4] += dt * 0.5  # radians per second
 
             for e, j in enumerate(vertexes):
                 r1 = ((j[0], j[1], j[2], 1),
@@ -72,26 +70,18 @@ class droppedBlock:
 
             block = self.gl.block[i[1][1]]
             tex_coords = ('t2f', (0, 0, 1, 0, 1, 1, 0, 1))
-            self.gl.stuffBatch.add(4, GL_QUADS, block[4], ('v3f', vertexes[0]),
-                                   tex_coords)  # back
+            self.gl.stuffBatch.add(4, GL_QUADS, block[4], ('v3f', vertexes[0]), tex_coords)
             if i[1][5]:
-                self.gl.stuffBatch.add(4, GL_QUADS, block[5], ('v3f', vertexes[1]),
-                                       tex_coords)  # front
-
-                self.gl.stuffBatch.add(4, GL_QUADS, block[0], ('v3f', vertexes[2]),
-                                       tex_coords)  # left
-                self.gl.stuffBatch.add(4, GL_QUADS, block[1], ('v3f', vertexes[3]),
-                                       tex_coords)  # right
-
-                self.gl.stuffBatch.add(4, GL_QUADS, block[2], ('v3f', vertexes[4]),
-                                       tex_coords)  # bottom
-                self.gl.stuffBatch.add(4, GL_QUADS, block[3], ('v3f', vertexes[5]),
-                                       tex_coords)  # top
+                self.gl.stuffBatch.add(4, GL_QUADS, block[5], ('v3f', vertexes[1]), tex_coords)
+                self.gl.stuffBatch.add(4, GL_QUADS, block[0], ('v3f', vertexes[2]), tex_coords)
+                self.gl.stuffBatch.add(4, GL_QUADS, block[1], ('v3f', vertexes[3]), tex_coords)
+                self.gl.stuffBatch.add(4, GL_QUADS, block[2], ('v3f', vertexes[4]), tex_coords)
+                self.gl.stuffBatch.add(4, GL_QUADS, block[3], ('v3f', vertexes[5]), tex_coords)
 
             if i[1][3][1] == "-":
-                i[1][3][0] -= 0.003
+                i[1][3][0] -= 0.003 * dt * 60
             if i[1][3][1] == "+":
-                i[1][3][0] += 0.003
+                i[1][3][0] += 0.003 * dt * 60
 
             if i[1][3][0] < -0.1:
                 i[1][3][1] = "+"
@@ -103,6 +93,6 @@ class droppedBlock:
                 continue
             yy = i[1][0][1]
             if roundPos((i[1][0][0], i[1][0][1], i[1][0][2])) not in self.gl.cubes.cubes:
-                yy -= 0.1
+                yy -= 0.1 * dt * 60
             self.blocks[i[0]][0] = (i[1][0][0], yy, i[1][0][2])
             self.blocks[i[0]][4] = i[1][4]
