@@ -6,3 +6,6 @@
 aldiskdagda
 *.pub
 *.pyc
+*.pyc
+/__pycache__
+/saves
