@@ -69,8 +69,14 @@ def respawn():
     player.hp = 20
     player.playerDead = False
     log_deb("setting player position...")
-    player.position = scene.startPlayerPos
-    player.lastPlayerPosOnGround = scene.startPlayerPos
+    safe_spawn = scene.worldGen.find_safe_spawn()
+    if safe_spawn:
+        scene.startPlayerPos = safe_spawn
+        player.position = safe_spawn
+        player.lastPlayerPosOnGround = safe_spawn
+    else:
+        player.position = scene.startPlayerPos
+        player.lastPlayerPosOnGround = scene.startPlayerPos
 
 
 def saveWorld(worldGen, save_path):

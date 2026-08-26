@@ -96,9 +96,11 @@ class worldGenerator:
                 af = activeBiome.getBiomeGrass()
                 self.add((x, y, z), af)
                 if self.gl.startPlayerPos == [0, -9000, 0] and not spawnTree:
-                    self.gl.startPlayerPos = [x, y + 2, z]
-                    self.gl.player.position = [x, y + 2, z]
-                    self.gl.player.lastPlayerPosOnGround = [x, y + 2, z]
+                    safe_spawn = self.find_safe_spawn(x, z)
+                    self.gl.startPlayerPos = safe_spawn
+                    if hasattr(self.gl, 'player') and self.gl.player is not None:
+                        self.gl.player.position = safe_spawn
+                        self.gl.player.lastPlayerPosOnGround = safe_spawn
 
                 if spawnTree and activeBiome.biome in ["forest", "taiga"]:
                     self.spawnTree(x, y, z)

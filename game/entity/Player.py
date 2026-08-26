@@ -41,6 +41,11 @@ class Player:
         self.kW, self.kS, self.kA, self.kD = 0, 0, 0, 0
         self.gl.allowEvents["collisions"] = True
 
+    @staticmethod
+    def get_physics_dt():
+        fps = max(MAX_FPS, 30)
+        return min(max(1.0 / fps, 0.016), 0.05)
+
     def setCameraShake(self):
         if not self.canShake or self.shift > 0:
             return
@@ -176,8 +181,7 @@ class Player:
                 self.setShift(False)
                 self.acceleration = 0
 
-            dt = self.speed
-
+            dt = self.get_physics_dt()
             self.position = [self.position[0] + DX, self.position[1] + DY, self.position[2] + DZ]
 
             if dt < 0.2:
@@ -188,7 +192,7 @@ class Player:
                 for i in range(10):
                     self.move(dt, DX, DY, DZ)
         else:
-            self.move(self.speed, 0, 0, 0)
+            self.move(self.get_physics_dt(), 0, 0, 0)
 
         glPushMatrix()
         glRotatef(self.rotation[0], 1, 0, 0)
@@ -202,12 +206,11 @@ class Player:
             self.dy = 5.5
 
     def move(self, dt, dx, dy, dz):
-        dt = 0.009
+        dt = self.get_physics_dt()
         if self.is_spectator:
             dt = 0
         else:
             pass
-        # dt=0.00003 lol if i set this to 0.00003 the player will fly (very happy for spectator mode)
         self.dy -= dt * self.gravity
         self.dy = max(self.dy, -self.tVel)
         dy += self.dy * dt

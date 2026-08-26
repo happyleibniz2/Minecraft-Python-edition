@@ -16,6 +16,6 @@ class ModLoader:
         logging.debug("found no mods.")
 
     def try_better(self):
-        self.settings.MAX_FPS = 200
+        self.settings.MAX_FPS = 30
         self.settings.RENDER_DISTANCE = 96
         self.garbage_collector.collect()
