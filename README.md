@@ -82,7 +82,7 @@ Scroll Down	Cycle to next hotbar slot
 
 Mouse Movement	Look around (camera rotation)
 
-REQUIREMENTS:
+# REQUIREMENTS:
 
 ```pyopengl==3.1.5```
 
