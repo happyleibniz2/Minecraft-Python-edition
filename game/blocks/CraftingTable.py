@@ -1,4 +1,5 @@
 from game.GUI.ModalWindow import ModalWindow
+from game.crafting import getCraftingItem
 from settings import *
 import pyglet
 
@@ -67,8 +68,22 @@ class CraftingTable:
 
         self.window.show()
 
+    def consumeIngredients(self):
+        for slot in range(4):
+            if self.inventory.get(slot, ["", 0])[1] > 0:
+                self.inventory[slot][1] -= 1
+                if self.inventory[slot][1] <= 0:
+                    self.inventory[slot] = ["", 0]
+        self.inventory[9] = ["", 0]
+
     def windowClickEvent(self, button, cell):
         if button[0]:
+            if cell == 9 and self.inventory.get(9, ["", 0])[0]:
+                if not self.draggingItem:
+                    self.draggingItem = [self.inventory[9][0], self.inventory[9][1]]
+                    self.consumeIngredients()
+                return
+
             if self.draggingItem:
                 if cell in self.inventory and self.inventory[cell][1] == 0:
                     self.inventory[cell] = self.draggingItem
@@ -100,11 +115,20 @@ class CraftingTable:
             if slot < 37:
                 self.inventory[slot] = inventory.get(slot, ["", 0])
 
-        result = self.inventory.get(41, ["", 0])
-        if result[0]:
-            slot = self.window.cellPositions.get(41)
-            if slot:
-                self.window.cellPositions[41][1] = result
+        recipe_slots = [
+            self.inventory.get(0, ["", 0])[0] if self.inventory.get(0, ["", 0])[1] else "",
+            self.inventory.get(1, ["", 0])[0] if self.inventory.get(1, ["", 0])[1] else "",
+            self.inventory.get(3, ["", 0])[0] if self.inventory.get(3, ["", 0])[1] else "",
+            self.inventory.get(4, ["", 0])[0] if self.inventory.get(4, ["", 0])[1] else "",
+        ]
+        recipe_counts = [
+            self.inventory.get(0, ["", 0])[1] if self.inventory.get(0, ["", 0])[1] else 0,
+            self.inventory.get(1, ["", 0])[1] if self.inventory.get(1, ["", 0])[1] else 0,
+            self.inventory.get(3, ["", 0])[1] if self.inventory.get(3, ["", 0])[1] else 0,
+            self.inventory.get(4, ["", 0])[1] if self.inventory.get(4, ["", 0])[1] else 0,
+        ]
+        result = getCraftingItem(recipe_slots, numbers=recipe_counts)
+        self.inventory[9] = result if result and result[0] else ["", 0]
 
         for slot, position in self.window.cellPositions.items():
             if slot not in self.inventory:

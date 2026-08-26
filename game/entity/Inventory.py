@@ -34,6 +34,14 @@ class Inventory:
         for slot in range(37,42):
             self.inventory[slot] = ["", 0]
 
+    def consumeCraftingIngredients(self):
+        for slot in range(37, 41):
+            if self.inventory[slot][1] > 0:
+                self.inventory[slot][1] -= 1
+                if self.inventory[slot][1] <= 0:
+                    self.inventory[slot] = ["", 0]
+        self.inventory[41] = ["", 0]
+
     def get_inventory_blocks(self):
         return self.inventory
 
@@ -74,6 +82,12 @@ class Inventory:
 
     def windowClickEvent(self, button, cell):
         if button[0]:
+            if cell == 41 and self.inventory.get(41, ["", 0])[0]:
+                if not self.draggingItem:
+                    self.draggingItem = [self.inventory[41][0], self.inventory[41][1]]
+                    self.consumeCraftingIngredients()
+                return
+
             if self.draggingItem:
                 if self.inventory[cell][1] == 0:
                     self.inventory[cell] = self.draggingItem
@@ -115,10 +129,6 @@ class Inventory:
             self.inventory[41] = craftResult
         else:
             self.inventory[41] = ["", 0]
-
-        if self.inventory[41][0] and self.draggingItem and self.draggingItem[1]:
-            self.draggingItem = [self.inventory[41][0], int(self.inventory[41][1])]
-            self.clearCraftingSlots()
 
         for i in self.window.cellPositions.items():
             xx, yy = self.window.cellPositions[i[0]][0][0], self.window.cellPositions[i[0]][0][1]

@@ -84,4 +84,3 @@ class Particles:
                                    tex_coords)  # top
 
             particle[2] -= 0.009
-            self.particles[e] = particle

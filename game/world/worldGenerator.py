@@ -9,7 +9,18 @@ import pickle
 
 class worldGenerator:
     def __init__(self, glClass, seed=43242, world=None):
-        self.world = open('saves/Current_world/world.dat', 'rb').read()
+        self.world = {}
+        try:
+            with open('saves/Current_world/world.dat', 'rb') as save_file:
+                raw_world = save_file.read()
+            if raw_world:
+                try:
+                    self.world = pickle.loads(raw_world)
+                except (pickle.PickleError, EOFError, AttributeError, ValueError):
+                    self.world = {}
+        except FileNotFoundError:
+            self.world = {}
+
         self.cow = None
         self.seed = seed
         self.chunks = {}
@@ -25,7 +36,7 @@ class worldGenerator:
         self.queue = deque(q)
 
         self.start = len(self.queue)
-        self.blocks = {}  # dict(pickle.loads(self.world))
+        self.blocks = dict(self.world) if isinstance(self.world, dict) else {}
         self.loading = deque()
         self.last_gen_tick = 0
 
@@ -157,3 +168,26 @@ class worldGenerator:
                         self.add((x + j, y + i, z + k), 'leaves_oak')
                     cl += 1
         self.add((x, y + treeHeight + 1, z), 'leaves_oak')
+
+    def find_safe_spawn(self, center_x=0, center_z=0, radius=32):
+        max_y = 128
+        min_y = -10
+        best = None
+        for r in range(0, radius + 1):
+            for x in range(center_x - r, center_x + r + 1):
+                for z in range(center_z - r, center_z + r + 1):
+                    if abs(x - center_x) + abs(z - center_z) > r + 4:
+                        continue
+                    for y in range(max_y, min_y, -1):
+                        pos = (x, y, z)
+                        above = (x, y + 1, z)
+                        if pos in self.gl.cubes.cubes and above not in self.gl.cubes.cubes:
+                            candidate = [x, y + 2, z]
+                            if best is None:
+                                best = candidate
+                            elif abs(candidate[0] - center_x) + abs(candidate[2] - center_z) < abs(best[0] - center_x) + abs(best[2] - center_z):
+                                best = candidate
+                            break
+        if best is not None:
+            return best
+        return [0, 64, 0]

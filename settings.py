@@ -28,7 +28,7 @@ pygame.init()
 monitor = pygame.display.Info()
 WIDTH = monitor.current_w
 HEIGHT = monitor.current_h
-MAX_FPS = 120
+MAX_FPS = 30
 PAUSE = True
 IN_MENU = True
 MC_VERSION = "Pre Classic 0.48"
