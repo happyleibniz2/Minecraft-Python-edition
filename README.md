@@ -5,6 +5,13 @@
 ![NumPy](https://img.shields.io/badge/numpy-%23013243.svg?style=for-the-badge&logo=numpy&logoColor=white)
 ![OpenGL](https://img.shields.io/badge/opengl-%235586A4.svg?style=for-the-badge&logo=opengl&logoColor=white) 
 Using pygame opengl pyglet from PYTHON
+
+## In game screenshots
+<img width="1274" height="754" alt="屏幕截图 2026-08-26 075310" src="https://github.com/user-attachments/assets/161883b2-27c2-4fb7-a7f4-bc6a62de4260" />
+<img width="1271" height="760" alt="屏幕截图 2026-08-26 075317" src="https://github.com/user-attachments/assets/78d54698-4012-43ab-be1e-e27055eb6f0d" />
+<img width="1266" height="760" alt="屏幕截图 2026-08-26 075447" src="https://github.com/user-attachments/assets/4f5ac20f-1e5c-4d7b-b591-6417ab5a6a4a" />
+<img width="1277" height="744" alt="屏幕截图 2026-08-26 075509" src="https://github.com/user-attachments/assets/c2683360-2c94-4f34-9b5a-f9542bbf5ca9" />
+
 ## Blocks
 ```
 Grass
