@@ -1,5 +1,86 @@
-# Minecraft_python_Edition
-Minecraft using pygame opengl pyglet from PYTHON
+# Minecraft Python Edition
+<img width="1518" height="633" alt="image" src="https://github.com/user-attachments/assets/ffbcd271-5f2a-4176-b17f-d795d6011783" />
+
+![Python](https://img.shields.io/badge/python-%233670A0.svg?style=for-the-badge&logo=python&logoColor=ffdd54)
+![NumPy](https://img.shields.io/badge/numpy-%23013243.svg?style=for-the-badge&logo=numpy&logoColor=white)
+![OpenGL](https://img.shields.io/badge/opengl-%235586A4.svg?style=for-the-badge&logo=opengl&logoColor=white) 
+Using pygame opengl pyglet from PYTHON
+## Blocks
+```
+Grass
+Dirt
+Stone
+Bedrock
+Sand
+Sandstone
+Gravel
+Coal Ore
+Iron Ore
+Gold Ore
+Redstone Ore
+Diamond Ore
+Emerald Ore
+Oak Log
+Oak Leaves
+Birch Log (from debug inventory)
+Taiga Leaves (mentioned in alpha textures)
+Tall Grass (mentioned in alpha textures)
+Sapling (drops from leaves)
+Cactus (generated in deserts)
+Cobblestone (drops from stone)
+Oak Planks (crafted from logs)
+Crafting Table (crafted from planks)
+TNT (from debug inventory, can explode using Oak Log)
+Ancient Debris (from debug inventory)
+Debug Block (placeholder)
+Clouds (rendered in the sky)
+Water (fluid, but placed as a block)
+```
+## Keyboard Controls (24 Keys)
+### Movement & Actions
+W	Move forward
+
+S	Move backward
+
+A	Strafe left
+
+D	Strafe right
+
+Space	Jump / Fly up (spectator)
+
+LShift	Sneak (prevents falling off edges) / Fly down (spectator)
+
+LCtrl	Sprint (run faster)
+### Inventory & UI
+E	Open/Close inventory
+
+1 – 9	Select hotbar slot (1–9)
+
+Esc	Pause game / Open game menu
+### Debug & Tools
+F3	Toggle debug HUD (shows coordinates, biome, FPS, etc.)
+
+F5	Cycle camera view (1st person → 3rd person → etc.)
+
+T	Open command input (type /clear or /exit)
+
+P	Toggle spectator mode (free flight, no clipping)
+
+L	Debug: Fill inventory with random blocks (grass, stone, TNT, etc.)
+
+F11	Toggle fullscreen mode
+
+### Mouse Controls (5 Interactions)
+
+Left Click (hold)	Break / mine blocks
+
+Right Click	Place blocks / Open crafting table / Interact
+
+Scroll Up	Cycle to previous hotbar slot
+
+Scroll Down	Cycle to next hotbar slot
+
+Mouse Movement	Look around (camera rotation)
 
 REQUIREMENTS:
 
@@ -11,57 +92,4 @@ REQUIREMENTS:
 
 ```pygame==2.0.1```
 
-keys:
 
-```w```:player move forward
-
-```a```:player move left
-
-```s```:player move back
-
-```d```:player move right
-
-```e```:inventory
-
-```Esc```:pause the game ⏸️
-
-
-⚠️WARNING⚠️
-
-THIS PROGRAM IS STILL TESTING⚠️
-
-COMPONENTS MIGHT BREAK OR CRASH
-
-If you find any issue please let me know📞(or email me 📧
-
-要求：
-
-```PyOpenGL版本号3.1.5 版本```
-
-```pyglet版本号1.5.28```
-
-```NumPy版本号1.19.3```
-
-```Pygame 版本号2.0.1```
-
-keys：
-
-```w```：玩家前进
-
-```a```：玩家向左移动
-
-```s```:player 移动到后边
-
-```d```:玩家向右移动
-
-```e```：库存
-
-```Esc```：暂停游戏⏸️
-
-⚠️警告⚠️
-
-此程序仍在测试中⚠️
-
-组件可能损坏或崩溃
-
-如果您发现任何问题，请告诉我📞(or email me📧
