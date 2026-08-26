@@ -1,27 +1,13 @@
 import random
 from collections import deque
-from mobs.cow import Cow as Cow
+
 from game.world.Biomes import Biomes, getBiomeByTemp
 from game.world.PerlinNoise import PerlinNoise
 from settings import *
-import pickle
 
 
 class worldGenerator:
-    def __init__(self, glClass, seed=43242, world=None):
-        self.world = {}
-        try:
-            with open('saves/Current_world/world.dat', 'rb') as save_file:
-                raw_world = save_file.read()
-            if raw_world:
-                try:
-                    self.world = pickle.loads(raw_world)
-                except (pickle.PickleError, EOFError, AttributeError, ValueError):
-                    self.world = {}
-        except FileNotFoundError:
-            self.world = {}
-
-        self.cow = None
+    def __init__(self, glClass, seed=43242):
         self.seed = seed
         self.chunks = {}
         self.worldPerlin = PerlinNoise(seed, mh=8)
@@ -36,9 +22,8 @@ class worldGenerator:
         self.queue = deque(q)
 
         self.start = len(self.queue)
-        self.blocks = dict(self.world) if isinstance(self.world, dict) else {}
+        self.blocks = {}
         self.loading = deque()
-        self.last_gen_tick = 0
 
     def add(self, p, t):
         if p in self.blocks:
@@ -47,33 +32,21 @@ class worldGenerator:
         self.loading.append((p, t))
         self.gl.cubes.add(p, t)
 
-    def genChunk(self, player, max_chunks_per_call=8, max_blocks_per_call=256):
+    def genChunk(self, player):
         if player.hp == -1:
             player.hp = 20
 
-        now = pygame.time.get_ticks()
-        if now - getattr(self, 'last_gen_tick', 0) < 15:
-            return
-        self.last_gen_tick = now
-
-        chunks_processed = 0
-        while self.queue and chunks_processed < max_chunks_per_call:
+        if self.queue:
             self.gen(*self.queue.popleft())
-            chunks_processed += 1
 
-        block_budget = max_blocks_per_call
-        while self.loading and block_budget > 0:
-            p, t = self.loading.popleft()
-            if p in self.gl.cubes.cubes:
-                try:
-                    self.gl.cubes.updateCube(self.gl.cubes.cubes[p])
-                except Exception:
-                    pass
-            block_budget -= 1
+            while self.loading:
+                p, t = self.loading.popleft()
+                self.gl.cubes.updateCube(self.gl.cubes.cubes[p])
 
     def gen(self, xx, zz):
         sy = CHUNK_SIZE[1]
         oldY = 0
+
         for x in range(xx, xx + CHUNK_SIZE[0]):
             for z in range(zz, zz + CHUNK_SIZE[2]):
                 y = self.worldPerlin(x, z)
@@ -93,52 +66,46 @@ class worldGenerator:
                     ch = 50
 
                 spawnTree = random.randint(0, ch) == 20 and y > sy - 5
-                af = activeBiome.getBiomeGrass()
-                self.add((x, y, z), af)
+
+                self.add((x, y, z), activeBiome.getBiomeGrass())
                 if self.gl.startPlayerPos == [0, -9000, 0] and not spawnTree:
-                    safe_spawn = self.find_safe_spawn(x, z)
-                    self.gl.startPlayerPos = safe_spawn
-                    if hasattr(self.gl, 'player') and self.gl.player is not None:
-                        self.gl.player.position = safe_spawn
-                        self.gl.player.lastPlayerPosOnGround = safe_spawn
+                    self.gl.startPlayerPos = [x, y + 2, z]
+                    self.gl.player.position = [x, y + 2, z]
+                    self.gl.player.lastPlayerPosOnGround = [x, y + 2, z]
+
+                if spawnTree and activeBiome.biome in ["forest", "taiga"]:
+                    self.spawnTree(x, y, z)
 
                 self.add((x, 0, z), "bedrock")
                 for i in range(1, y):
                     if i > y - random.randint(5, 10):
                         self.add((x, i, z), activeBiome.getBiomeDirt())
-                        if activeBiome.getBiomePlant() == "cactus":
-                            self.add((x, y + 1, z), "cactus")
                     else:
                         self.add((x, i, z), activeBiome.getBiomeStone())
+                    if i < sy - 20:
                         self.genOre(x, i, z)
-
-                if spawnTree and activeBiome.biome in ["forest", "taiga"]:
-                    ground_block = (x, y - 1, z)
-                    if ground_block in self.gl.cubes.cubes:
-                        self.spawnTree(x, y, z)
 
     def genOre(self, x, y, z):
         if random.randint(0, 5753) != random.randint(0, 1575):
             return
         r1 = random.randint(-1, 2)
         r2 = random.randint(0, 2)
-        ore = self.getOreByY(int(y))
+        ore = self.getOreByY(y)
 
         for xi in range(r1, r2):
             for yi in range(r1):
                 for zi in range(r2):
-                    self.add((int(x + xi), int(y + yi), int(z + zi)), ore)
+                    self.add((x + xi, yi + y, zi + z), ore)
 
     def getOreByY(self, y):
         if y < 20:
-            _diamond = random.randint(1, 1176)
-            if _diamond > 54:
+            if random.randint(0, 150) > 54:
                 return "diamond_ore"
-            if random.randint(1, 1234) > 54:
+            if random.randint(0, 1000) > 54:
                 return "emerald_ore"
-            if random.randint(1, 16) < 54:
+            if random.randint(0, 180) < 54:
                 return "redstone_ore"
-        elif y < 96:
+        elif y < 40:
             if random.randint(0, 180) == 54:
                 return "gold_ore"
         if random.randint(0, 100) < 54:
@@ -172,26 +139,3 @@ class worldGenerator:
                         self.add((x + j, y + i, z + k), 'leaves_oak')
                     cl += 1
         self.add((x, y + treeHeight + 1, z), 'leaves_oak')
-
-    def find_safe_spawn(self, center_x=0, center_z=0, radius=32):
-        max_y = 128
-        min_y = -10
-        best = None
-        for r in range(0, radius + 1):
-            for x in range(center_x - r, center_x + r + 1):
-                for z in range(center_z - r, center_z + r + 1):
-                    if abs(x - center_x) + abs(z - center_z) > r + 4:
-                        continue
-                    for y in range(max_y, min_y, -1):
-                        pos = (x, y, z)
-                        above = (x, y + 1, z)
-                        if pos in self.gl.cubes.cubes and above not in self.gl.cubes.cubes:
-                            candidate = [x, y + 2, z]
-                            if best is None:
-                                best = candidate
-                            elif abs(candidate[0] - center_x) + abs(candidate[2] - center_z) < abs(best[0] - center_x) + abs(best[2] - center_z):
-                                best = candidate
-                            break
-        if best is not None:
-            return best
-        return [0, 64, 0]
