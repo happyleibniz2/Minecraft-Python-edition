@@ -102,9 +102,6 @@ class worldGenerator:
                         self.gl.player.position = safe_spawn
                         self.gl.player.lastPlayerPosOnGround = safe_spawn
 
-                if spawnTree and activeBiome.biome in ["forest", "taiga"]:
-                    self.spawnTree(x, y, z)
-
                 self.add((x, 0, z), "bedrock")
                 for i in range(1, y):
                     if i > y - random.randint(5, 10):
@@ -114,6 +111,11 @@ class worldGenerator:
                     else:
                         self.add((x, i, z), activeBiome.getBiomeStone())
                         self.genOre(x, i, z)
+
+                if spawnTree and activeBiome.biome in ["forest", "taiga"]:
+                    ground_block = (x, y - 1, z)
+                    if ground_block in self.gl.cubes.cubes:
+                        self.spawnTree(x, y, z)
 
     def genOre(self, x, y, z):
         if random.randint(0, 5753) != random.randint(0, 1575):
