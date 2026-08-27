@@ -160,11 +160,10 @@ class Scene:
         self.loadPanoramaTextures()
         self.vertexList()
 
-        self.transparent = pyglet.graphics.Batch()
-        self.opaque = pyglet.graphics.Batch()
         self.stuffBatch = pyglet.graphics.Batch()
+
         self.player.inventory = Inventory(self)
-        self.cubes = CubeHandler(self.opaque, self.block, self.opaque,
+        self.cubes = CubeHandler(None, self.block, None,
                                  ('leaves_taiga', 'leaves_oak', 'tall_grass', 'nocolor', 'sapling'), self)
 
         self.zombie = Zombie(self)
@@ -190,9 +189,6 @@ class Scene:
             self.HEIGHT = h
         self.vertexList()
         glViewport(0, 0, w, h)
-
-    def drawZombie(self):
-        pass
 
     def drawPanorama(self):
         pp = self.player.position
@@ -226,6 +222,10 @@ class Scene:
 
     def updateScene(self, dt):
         self.genWorld()
+
+        # Rebuild dirty chunks
+        self.cubes.rebuild_dirty_chunks(self.player.position)
+
         if self.in_water:
             glFogfv(GL_FOG_COLOR, (GLfloat * 4)(0, 0, 0, 1))
             glFogf(GL_FOG_START, 10)
@@ -237,6 +237,7 @@ class Scene:
 
         self.set3d()
         glClearColor(self.skyColor[0] / 255, self.skyColor[1] / 255, self.skyColor[2] / 255, 1)
+
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
         glLoadIdentity()
 
@@ -275,13 +276,10 @@ class Scene:
             i()
 
     def draw(self):
-        glEnable(GL_ALPHA_TEST)
-        self.opaque.draw()
-        glDisable(GL_ALPHA_TEST)
-        glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE)
-        self.transparent.draw()
-        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE)
-        self.transparent.draw()
+        # Render chunks (pass player position for distance culling)
+        self.cubes.render(self.player.position)
+
+        # Draw the stuff batch (panorama, particles, dropped blocks, etc.)
         try:
             self.stuffBatch.draw()
         except pyglet.gl.lib.GLException:

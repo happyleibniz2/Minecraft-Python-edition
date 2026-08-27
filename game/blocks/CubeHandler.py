@@ -1,8 +1,7 @@
 from OpenGL.GL import *
-import numpy as np
 from functions import roundPos, cube_vertices, adjacent
 from game.blocks.Cube import Cube
-
+from game.blocks.RenderChunk import RenderChunk
 
 class CubeHandler:
     top_color = ('c3f', (1.0,) * 12)
@@ -11,73 +10,30 @@ class CubeHandler:
     bottom_color = ('c3f', (0.5,) * 12)
 
     def __init__(self, batch, block, opaque, alpha_textures, gl):
-        self.batch, self.block, self.alpha_textures, self.opaque = batch, block, alpha_textures, opaque
-        self.cubes = {}
-        self.transparent = gl.transparent
+        self.block = block
+        self.alpha_textures = alpha_textures
         self.gl = gl
-        self.fluids = {}
+
+        # All cubes (world pos -> Cube)
+        self.cubes = {}
+
+        # Collidable cubes (for physics)
         self.collidable = {}
-        vertex_shader_source = """
-#version 330 core
-layout (location = 0) in vec3 aPos;
-layout (location = 1) in vec3 aNormal;
 
-out vec3 Normal;
-out vec3 FragPos;
+        # Render chunks
+        self.render_chunks = {}
+        self.RENDER_CHUNK_SIZE = (8, 8, 8)   # smaller = faster rebuilds
+        self.max_rebuilds_per_frame = 2      # limit rebuilds to avoid lag
 
-uniform mat4 model;
-uniform mat4 view;
-uniform mat4 projection;
+        # For compatibility
+        self.fluids = {}
 
-void main()
-{
-    FragPos = vec3(model * vec4(aPos, 1.0));
-    Normal = mat3(transpose(inverse(model))) * aNormal;  
-    gl_Position = projection * view * vec4(FragPos, 1.0);
-}
-"""
-        self.vertex_shader = self.compile_shader(vertex_shader_source, GL_VERTEX_SHADER)
-        fragment_shader_source = """
-#version 330 core
-out vec4 FragColor;
-
-in vec3 Normal;
-in vec3 FragPos;
-
-uniform vec3 lightPos;
-uniform vec3 viewPos;
-uniform vec3 lightColor;
-uniform vec3 objectColor;
-
-void main()
-{
-    float ambientStrength = 0.1;
-    vec3 ambient = ambientStrength * lightColor;
-    
-    vec3 norm = normalize(Normal);
-    vec3 lightDir = normalize(lightPos - FragPos);
-    float diff = max(dot(norm, lightDir), 0.0);
-    vec3 diffuse = diff * lightColor;
-    
-    float specularStrength = 0.5;
-    vec3 viewDir = normalize(viewPos - FragPos);
-    vec3 reflectDir = reflect(-lightDir, norm);  
-    float spec = pow(max(dot(viewDir, reflectDir), 0.0), 32);
-    vec3 specular = specularStrength * spec * lightColor;  
-    
-    vec3 result = (ambient + diffuse + specular) * objectColor;
-    FragColor = vec4(result, 1.0);
-}
-"""
-        self.fragment_shader = self.compile_shader(fragment_shader_source, GL_FRAGMENT_SHADER)
-        self.shader_program = self.create_shader_program(self.vertex_shader, self.fragment_shader)
-
-        '''self.top_color = ('c3f', (0.1,) * 12)
-        self.ns_color = ('c3f', (0.1,) * 12)
-        self.ew_color = ('c3f', (0.1,) * 12)
-        self.bottom_color = ('c3f', (0.1,) * 12)'''
-
-        self.color = True
+    def _get_chunk_key(self, pos):
+        x, y, z = pos
+        cx = x // self.RENDER_CHUNK_SIZE[0]
+        cy = y // self.RENDER_CHUNK_SIZE[1]
+        cz = z // self.RENDER_CHUNK_SIZE[2]
+        return (cx, cy, cz)
 
     def hitTest(self, p, vec, dist=4):
         m = 8
@@ -94,76 +50,75 @@ void main()
             prev = key
             x, y, z = x + dx, y + dy, z + dz
         return None, None
-    
-    def create_shader_program(self,vertex_shader, fragment_shader):
-        return 0
-    
-    def compile_shader(self,source, shader_type):
-        return 0
 
-    def show(self, v, t, i, clrC=None):
-        # # After creating the shader program
-        # print("Shader Program ID:", self.shader_program)
-        #
-        # # Before using the shader program
-        # if glIsProgram(self.shader_program):
-        #     glUseProgram(self.shader_program)
-        # else:
-        #     print("Error: Shader program is not valid.")
-        #
-        # # Update vertex attribute pointers and enable them
-        # rotation = 0
-        # scale = 0
-        # for position in list(self.cubes.keys()):
-        #     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, v)
-        #     glEnableVertexAttribArray(0)
-        #     # Set uniforms (example: transformation matrices)
-        #     glUniformMatrix4fv(glGetUniformLocation(self.shader_program, "model"), 1, GL_FALSE, self.get_model_matrix(position=position,rotation=0,scale=0))
-        #
-        #     # Draw the cube
-        #     glDrawArrays(GL_TRIANGLES, 0, len(v) / 3)
-        #     model_matrix = self.get_model_matrix(position, rotation, scale)
-        #     model_matrix_loc = glGetUniformLocation(self.shader_program, "model")
-        #     glUniformMatrix4fv(model_matrix_loc, 1, GL_FALSE, model_matrix)
-        if not clrC:
-            if self.color:
-                if i == "left" or i == "front":
-                    clr = self.ns_color
-                if i == "right" or i == "back":
-                    clr = self.ew_color
-                if i == "bottom":
-                    clr = self.bottom_color
-                if i == "top":
-                    clr = self.top_color
-        else:
-            clr = clrC[i]
-
-        return self.opaque.add(4, GL_QUADS, t, ('v3f', v), ('t2f', (0, 0, 1, 0, 1, 1, 0, 1)), clr)
-
-    def updateCube(self, cube, customColor=None):
-        shown = any(cube.shown.values())
-        if shown:
-            if (cube.name != 'water' and cube.name != 'lava') and cube.p not in self.collidable:
-                self.collidable[cube.p] = cube
-        else:
-            if cube.p in self.collidable:
-                del self.collidable[cube.p]
+    def add(self, p, t, now=False):
+        if p in self.cubes:
             return
+        cube = self.cubes[p] = Cube(t, p, self.block[t],
+                                    'alpha' if t in self.alpha_textures else 'blend' if (t == 'water' or t == "lava") else 'solid')
 
-        show = self.show
-        v = cube_vertices(cube.p)
-        f = 'left', 'right', 'bottom', 'top', 'back', 'front'
-        for i in (0, 1, 2, 3, 4, 5):
-            if cube.shown[f[i]] and not cube.faces[f[i]]:
-                cube.faces[f[i]] = show(v[i], cube.t[i], f[i], clrC=customColor)
-            elif customColor:
-                if cube.color[f[i]] != customColor[f[i]]:
-                    if cube.shown[f[i]]:
-                        cube.faces[f[i]].delete()
-                        cube.faces[f[i]] = show(v[i], cube.t[i], f[i], clrC=customColor)
-                    cube.color[f[i]] = customColor[f[i]]
+        # Add to collidable if solid
+        if cube.name not in ('water', 'lava'):
+            self.collidable[p] = cube
+
+        # Add to render chunk
+        chunk_key = self._get_chunk_key(p)
+        if chunk_key not in self.render_chunks:
+            self.render_chunks[chunk_key] = RenderChunk(
+                chunk_key[0], chunk_key[1], chunk_key[2],
+                self.RENDER_CHUNK_SIZE, self.gl
+            )
+        self.render_chunks[chunk_key].add_cube(p, cube)
+
+        # Mark adjacent chunks dirty
+        for dx, dy, dz in ((1,0,0), (-1,0,0), (0,1,0), (0,-1,0), (0,0,1), (0,0,-1)):
+            adj_key = self._get_chunk_key((p[0]+dx, p[1]+dy, p[2]+dz))
+            if adj_key in self.render_chunks:
+                self.render_chunks[adj_key].dirty = True
+
+        # Existing adjacency logic (for shown faces, though we now rebuild chunks entirely)
+        for adj in adjacent(*cube.p):
+            if adj not in self.cubes:
+                self.set_adj(cube, adj, True)
+            else:
+                a, b = cube.type, self.cubes[adj].type
+                if a == b and (a == 'solid' or b == 'blend'):
+                    self.set_adj(self.cubes[adj], cube.p, False)
+                elif a != 'blend' and b != 'solid':
+                    self.set_adj(self.cubes[adj], cube.p, False)
+                    self.set_adj(cube, adj, True)
+
+    def remove(self, p):
+        if p not in self.cubes:
+            return
+        if self.cubes[p].name == "bedrock":
+            return
+        if p in self.fluids:
+            self.fluids.pop(p)
+        cube = self.cubes.pop(p)
+        if p in self.collidable:
+            del self.collidable[p]
+
+        chunk_key = self._get_chunk_key(p)
+        if chunk_key in self.render_chunks:
+            self.render_chunks[chunk_key].remove_cube(p)
+
+        # Mark neighbours dirty
+        for dx, dy, dz in ((1,0,0), (-1,0,0), (0,1,0), (0,-1,0), (0,0,1), (0,0,-1)):
+            adj_key = self._get_chunk_key((p[0]+dx, p[1]+dy, p[2]+dz))
+            if adj_key in self.render_chunks:
+                self.render_chunks[adj_key].dirty = True
+
+        # Update adjacent cubes (they may now have new exposed faces)
+        # We don't need to update shown because we rebuild chunks, but we still update collidable.
+        # We'll also update the neighbours' collidable status (should already be fine).
+        for adj in adjacent(*cube.p):
+            if adj in self.cubes:
+                self.set_adj(self.cubes[adj], cube.p, True)
 
     def set_adj(self, cube, adj, state):
+        # This updates the shown flag, but now we don't use it for rendering.
+        # However, it might be used elsewhere, so we keep it.
         x, y, z = cube.p
         X, Y, Z = adj
         d = X - x, Y - y, Z - z
@@ -181,90 +136,56 @@ void main()
                 cube.faces[a].delete()
                 cube.faces[a] = None
 
-    def add(self, p, t, now=False):
-        if p in self.cubes:
+    def updateCube(self, cube, customColor=None):
+        # No‑op because we use chunk rebuilds
+        pass
+
+    def show(self, v, t, i, clrC=None):
+        # Not used
+        return None
+
+    def rebuild_dirty_chunks(self, player_pos, render_distance=64):
+        """Rebuild up to max_rebuilds_per_frame dirty chunks, closest first."""
+        dirty = [chunk for chunk in self.render_chunks.values() if chunk.dirty]
+        if not dirty:
             return
-        cube = self.cubes[p] = Cube(t, p, self.block[t],
-                                    'alpha' if t in self.alpha_textures else 'blend' if (t == 'water' or t == "lava")
-                                    else 'solid')
 
-        for adj in adjacent(*cube.p):
-            if adj not in self.cubes:
-                self.set_adj(cube, adj, True)
-            else:
-                a, b = cube.type, self.cubes[adj].type
-                if a == b and (a == 'solid' or b == 'blend'):
-                    self.set_adj(self.cubes[adj], cube.p, False)
-                elif a != 'blend' and b != 'solid':
-                    self.set_adj(self.cubes[adj], cube.p, False)
-                    self.set_adj(cube, adj, True)
-                if now:
-                    self.updateCube(self.cubes[adj])
+        # Filter chunks within render distance
+        def within_distance(chunk):
+            cx = chunk.cx * self.RENDER_CHUNK_SIZE[0] + self.RENDER_CHUNK_SIZE[0]//2
+            cy = chunk.cy * self.RENDER_CHUNK_SIZE[1] + self.RENDER_CHUNK_SIZE[1]//2
+            cz = chunk.cz * self.RENDER_CHUNK_SIZE[2] + self.RENDER_CHUNK_SIZE[2]//2
+            dx = cx - player_pos[0]
+            dy = cy - player_pos[1]
+            dz = cz - player_pos[2]
+            return dx*dx + dy*dy + dz*dz < render_distance*render_distance
 
-        if now:
-            self.updateCube(cube)
+        dirty = [c for c in dirty if within_distance(c)]
 
-    def translate(self,x, y, z):
-        return np.array([
-            [1, 0, 0, x],
-            [0, 1, 0, y],
-            [0, 0, 1, z],
-            [0, 0, 0, 1]
-        ])
+        # Sort by distance
+        def priority(chunk):
+            cx = chunk.cx * self.RENDER_CHUNK_SIZE[0] + self.RENDER_CHUNK_SIZE[0]//2
+            cy = chunk.cy * self.RENDER_CHUNK_SIZE[1] + self.RENDER_CHUNK_SIZE[1]//2
+            cz = chunk.cz * self.RENDER_CHUNK_SIZE[2] + self.RENDER_CHUNK_SIZE[2]//2
+            dx = cx - player_pos[0]
+            dy = cy - player_pos[1]
+            dz = cz - player_pos[2]
+            return dx*dx + dy*dy + dz*dz
 
-    def rotate_x(self,angle):
-        c, s = np.cos(angle), np.sin(angle)
-        return np.array([
-            [1, 0,  0, 0],
-            [0, c, -s, 0],
-            [0, s,  c, 0],
-            [0, 0,  0, 1]
-        ])
+        dirty.sort(key=priority)
 
-    def rotate_y(self,angle):
-        c, s = np.cos(angle), np.sin(angle)
-        return np.array([
-            [ c, 0, s, 0],
-            [ 0, 1, 0, 0],
-            [-s, 0, c, 0],
-            [ 0, 0, 0, 1]
-        ])
+        # Rebuild limited number
+        for chunk in dirty[:self.max_rebuilds_per_frame]:
+            chunk.rebuild()
 
-    def scale(self,sx, sy, sz):
-        return np.array([
-            [sx,  0,  0, 0],
-            [ 0, sy,  0, 0],
-            [ 0,  0, sz, 0],
-            [ 0,  0,  0, 1]
-        ])
-    
-    def get_model_matrix(self,position, rotation, scale):
-        translation_matrix = self.translate(*position)
-        rotation_matrix_x = self.rotate_x(rotation[0])
-        rotation_matrix_y = self.rotate_y(rotation[1])
-        scaling_matrix = self.scale(*scale)
-        
-        # Combine transformations
-        model_matrix = np.dot(translation_matrix, np.dot(rotation_matrix_x, rotation_matrix_y))
-        model_matrix = np.dot(model_matrix, scaling_matrix)
-        return model_matrix
-
-    def remove(self, p):
-        if p not in self.cubes:
-            return
-        if self.cubes[p].name == "bedrock":
-            return
-        if p in self.fluids:
-            self.fluids.pop(p)
-        cube = self.cubes.pop(p)
-
-        for side, face in cube.faces.items():
-            if face:
-                face.delete()
-            cube.shown[side] = False
-        self.updateCube(cube)
-
-        for adj in adjacent(*cube.p):
-            if adj in self.cubes:
-                self.set_adj(self.cubes[adj], cube.p, True)
-                self.updateCube(self.cubes[adj])
+    def render(self, player_pos, render_distance=64):
+        """Render only chunks within render distance."""
+        for chunk in self.render_chunks.values():
+            cx = chunk.cx * self.RENDER_CHUNK_SIZE[0] + self.RENDER_CHUNK_SIZE[0]//2
+            cy = chunk.cy * self.RENDER_CHUNK_SIZE[1] + self.RENDER_CHUNK_SIZE[1]//2
+            cz = chunk.cz * self.RENDER_CHUNK_SIZE[2] + self.RENDER_CHUNK_SIZE[2]//2
+            dx = cx - player_pos[0]
+            dy = cy - player_pos[1]
+            dz = cz - player_pos[2]
+            if dx*dx + dy*dy + dz*dz < render_distance*render_distance:
+                chunk.render()
