@@ -160,9 +160,11 @@ class Scene:
         self.loadPanoramaTextures()
         self.vertexList()
 
+        # We use a single batch for non‑block objects (particles, dropped items, panorama)
         self.stuffBatch = pyglet.graphics.Batch()
 
         self.player.inventory = Inventory(self)
+        # CubeHandler now handles chunk rendering with frustum culling
         self.cubes = CubeHandler(None, self.block, None,
                                  ('leaves_taiga', 'leaves_oak', 'tall_grass', 'nocolor', 'sapling'), self)
 
@@ -223,7 +225,7 @@ class Scene:
     def updateScene(self, dt):
         self.genWorld()
 
-        # Rebuild dirty chunks
+        # Rebuild dirty chunks (max 2 per frame, closest first)
         self.cubes.rebuild_dirty_chunks(self.player.position)
 
         if self.in_water:
@@ -276,10 +278,10 @@ class Scene:
             i()
 
     def draw(self):
-        # Render chunks (pass player position for distance culling)
+        # Render all chunks (distance culling only, frustum disabled)
         self.cubes.render(self.player.position)
 
-        # Draw the stuff batch (panorama, particles, dropped blocks, etc.)
+        # Draw non‑block objects (panorama, particles, dropped items)
         try:
             self.stuffBatch.draw()
         except pyglet.gl.lib.GLException:

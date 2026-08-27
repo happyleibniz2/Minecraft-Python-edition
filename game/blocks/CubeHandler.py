@@ -2,6 +2,9 @@ from OpenGL.GL import *
 from functions import roundPos, cube_vertices, adjacent
 from game.blocks.Cube import Cube
 from game.blocks.RenderChunk import RenderChunk
+from game.Frustum import Frustum
+import settings  # for DISTANCE_CULLING and CHUNK_RENDER_DISTANCE
+
 
 class CubeHandler:
     top_color = ('c3f', (1.0,) * 12)
@@ -14,19 +17,17 @@ class CubeHandler:
         self.alpha_textures = alpha_textures
         self.gl = gl
 
-        # All cubes (world pos -> Cube)
-        self.cubes = {}
-
-        # Collidable cubes (for physics)
-        self.collidable = {}
+        self.cubes = {}          # world pos -> Cube
+        self.collidable = {}     # solid cubes for collision
+        self.fluids = {}
 
         # Render chunks
         self.render_chunks = {}
-        self.RENDER_CHUNK_SIZE = (8, 8, 8)   # smaller = faster rebuilds
-        self.max_rebuilds_per_frame = 2      # limit rebuilds to avoid lag
+        self.RENDER_CHUNK_SIZE = (8, 8, 8)
+        self.max_rebuilds_per_frame = 2
 
-        # For compatibility
-        self.fluids = {}
+        # Frustum culling (kept but disabled)
+        self.frustum = Frustum()
 
     def _get_chunk_key(self, pos):
         x, y, z = pos
@@ -57,11 +58,9 @@ class CubeHandler:
         cube = self.cubes[p] = Cube(t, p, self.block[t],
                                     'alpha' if t in self.alpha_textures else 'blend' if (t == 'water' or t == "lava") else 'solid')
 
-        # Add to collidable if solid
         if cube.name not in ('water', 'lava'):
             self.collidable[p] = cube
 
-        # Add to render chunk
         chunk_key = self._get_chunk_key(p)
         if chunk_key not in self.render_chunks:
             self.render_chunks[chunk_key] = RenderChunk(
@@ -70,13 +69,13 @@ class CubeHandler:
             )
         self.render_chunks[chunk_key].add_cube(p, cube)
 
-        # Mark adjacent chunks dirty
+        # Mark neighbours dirty
         for dx, dy, dz in ((1,0,0), (-1,0,0), (0,1,0), (0,-1,0), (0,0,1), (0,0,-1)):
             adj_key = self._get_chunk_key((p[0]+dx, p[1]+dy, p[2]+dz))
             if adj_key in self.render_chunks:
                 self.render_chunks[adj_key].dirty = True
 
-        # Existing adjacency logic (for shown faces, though we now rebuild chunks entirely)
+        # Legacy adjacency (for shown flags – not used for rendering but kept)
         for adj in adjacent(*cube.p):
             if adj not in self.cubes:
                 self.set_adj(cube, adj, True)
@@ -103,22 +102,16 @@ class CubeHandler:
         if chunk_key in self.render_chunks:
             self.render_chunks[chunk_key].remove_cube(p)
 
-        # Mark neighbours dirty
         for dx, dy, dz in ((1,0,0), (-1,0,0), (0,1,0), (0,-1,0), (0,0,1), (0,0,-1)):
             adj_key = self._get_chunk_key((p[0]+dx, p[1]+dy, p[2]+dz))
             if adj_key in self.render_chunks:
                 self.render_chunks[adj_key].dirty = True
 
-        # Update adjacent cubes (they may now have new exposed faces)
-        # We don't need to update shown because we rebuild chunks, but we still update collidable.
-        # We'll also update the neighbours' collidable status (should already be fine).
         for adj in adjacent(*cube.p):
             if adj in self.cubes:
                 self.set_adj(self.cubes[adj], cube.p, True)
 
     def set_adj(self, cube, adj, state):
-        # This updates the shown flag, but now we don't use it for rendering.
-        # However, it might be used elsewhere, so we keep it.
         x, y, z = cube.p
         X, Y, Z = adj
         d = X - x, Y - y, Z - z
@@ -137,32 +130,32 @@ class CubeHandler:
                 cube.faces[a] = None
 
     def updateCube(self, cube, customColor=None):
-        # No‑op because we use chunk rebuilds
+        # No‑op – we use chunk rebuilds
         pass
 
     def show(self, v, t, i, clrC=None):
-        # Not used
         return None
 
-    def rebuild_dirty_chunks(self, player_pos, render_distance=64):
-        """Rebuild up to max_rebuilds_per_frame dirty chunks, closest first."""
+    def rebuild_dirty_chunks(self, player_pos, render_distance=None):
+        if render_distance is None:
+            render_distance = settings.CHUNKS_RENDER_DISTANCE
+
         dirty = [chunk for chunk in self.render_chunks.values() if chunk.dirty]
         if not dirty:
             return
 
-        # Filter chunks within render distance
-        def within_distance(chunk):
-            cx = chunk.cx * self.RENDER_CHUNK_SIZE[0] + self.RENDER_CHUNK_SIZE[0]//2
-            cy = chunk.cy * self.RENDER_CHUNK_SIZE[1] + self.RENDER_CHUNK_SIZE[1]//2
-            cz = chunk.cz * self.RENDER_CHUNK_SIZE[2] + self.RENDER_CHUNK_SIZE[2]//2
-            dx = cx - player_pos[0]
-            dy = cy - player_pos[1]
-            dz = cz - player_pos[2]
-            return dx*dx + dy*dy + dz*dz < render_distance*render_distance
+        # Only filter by distance if culling is enabled
+        if settings.DISTANCE_CULLING:
+            def within_distance(chunk):
+                cx = chunk.cx * self.RENDER_CHUNK_SIZE[0] + self.RENDER_CHUNK_SIZE[0]//2
+                cy = chunk.cy * self.RENDER_CHUNK_SIZE[1] + self.RENDER_CHUNK_SIZE[1]//2
+                cz = chunk.cz * self.RENDER_CHUNK_SIZE[2] + self.RENDER_CHUNK_SIZE[2]//2
+                dx = cx - player_pos[0]
+                dy = cy - player_pos[1]
+                dz = cz - player_pos[2]
+                return dx*dx + dy*dy + dz*dz < render_distance*render_distance
+            dirty = [c for c in dirty if within_distance(c)]
 
-        dirty = [c for c in dirty if within_distance(c)]
-
-        # Sort by distance
         def priority(chunk):
             cx = chunk.cx * self.RENDER_CHUNK_SIZE[0] + self.RENDER_CHUNK_SIZE[0]//2
             cy = chunk.cy * self.RENDER_CHUNK_SIZE[1] + self.RENDER_CHUNK_SIZE[1]//2
@@ -173,19 +166,36 @@ class CubeHandler:
             return dx*dx + dy*dy + dz*dz
 
         dirty.sort(key=priority)
-
-        # Rebuild limited number
         for chunk in dirty[:self.max_rebuilds_per_frame]:
             chunk.rebuild()
 
-    def render(self, player_pos, render_distance=64):
-        """Render only chunks within render distance."""
+    def render(self, player_pos, render_distance=None):
+        if render_distance is None:
+            render_distance = settings.CHUNKS_RENDER_DISTANCE
+
+        # Frustum culling – DISABLED (kept for future)
+        # self.frustum.extract()
+
         for chunk in self.render_chunks.values():
-            cx = chunk.cx * self.RENDER_CHUNK_SIZE[0] + self.RENDER_CHUNK_SIZE[0]//2
-            cy = chunk.cy * self.RENDER_CHUNK_SIZE[1] + self.RENDER_CHUNK_SIZE[1]//2
-            cz = chunk.cz * self.RENDER_CHUNK_SIZE[2] + self.RENDER_CHUNK_SIZE[2]//2
-            dx = cx - player_pos[0]
-            dy = cy - player_pos[1]
-            dz = cz - player_pos[2]
-            if dx*dx + dy*dy + dz*dz < render_distance*render_distance:
-                chunk.render()
+            # Distance check – only if culling is enabled
+            if settings.DISTANCE_CULLING:
+                cx = chunk.cx * self.RENDER_CHUNK_SIZE[0] + self.RENDER_CHUNK_SIZE[0]//2
+                cy = chunk.cy * self.RENDER_CHUNK_SIZE[1] + self.RENDER_CHUNK_SIZE[1]//2
+                cz = chunk.cz * self.RENDER_CHUNK_SIZE[2] + self.RENDER_CHUNK_SIZE[2]//2
+                dx = cx - player_pos[0]
+                dy = cy - player_pos[1]
+                dz = cz - player_pos[2]
+                if dx*dx + dy*dy + dz*dz > render_distance*render_distance:
+                    continue
+
+            # Frustum culling – DISABLED (code kept for later)
+            # x0 = chunk.cx * self.RENDER_CHUNK_SIZE[0]
+            # y0 = chunk.cy * self.RENDER_CHUNK_SIZE[1]
+            # z0 = chunk.cz * self.RENDER_CHUNK_SIZE[2]
+            # x1 = x0 + self.RENDER_CHUNK_SIZE[0]
+            # y1 = y0 + self.RENDER_CHUNK_SIZE[1]
+            # z1 = z0 + self.RENDER_CHUNK_SIZE[2]
+            # if not self.frustum.cube_in_frustum(x0, y0, z0, x1, y1, z1):
+            #     continue
+
+            chunk.render()

@@ -38,6 +38,6 @@ clock = pygame.time.Clock()
 DEBUG = True
 FOV = 100
 RENDER_DISTANCE = 192
-
+DISTANCE_CULLING = False 
 CHUNKS_RENDER_DISTANCE = 900
 CHUNK_SIZE = (4, 60, 4)
