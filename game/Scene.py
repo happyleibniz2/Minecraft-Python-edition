@@ -16,11 +16,9 @@ from game.world.worldGenerator import worldGenerator
 from game.blocks.CubeHandler import CubeHandler
 import logging
 
+
 class Scene:
     def __init__(self):
-        self.zombie_clothes_texture = {}
-        self.zombie_leg_texture = {}
-        self.zombie_hand_texture = {}
         print("Init Scene class...")
         logging.debug("Init Scene class...")
 
@@ -39,7 +37,6 @@ class Scene:
         self.entity = []
         self.skyColor = [128, 179, 255]
         self.panorama = {}
-        self.zombie_head_texture = {}
         self.in_water = False
 
         self.resetScene()
@@ -87,55 +84,13 @@ class Scene:
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
 
-        self.loadZombieHeadTextures()
-
-    def loadZombieHeadTextures(self):
-        print("Loading Zombie Textures(Beta test)...")
-        for e, i in enumerate(os.listdir("textures/zombie/")):
-            self.zombie_head_texture[e] = \
-                pyglet.graphics.TextureGroup(pyglet.image.load("textures/zombie/" + i).get_texture())
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
-        self.loadZombieLegTextures()
-
-    def loadZombieLegTextures(self):
-        for e, i in enumerate(os.listdir("textures/zombie_leg")):
-            __secret_texture = pyglet.image.load("textures/zombie_leg/" + i).get_texture()
-            self.zombie_leg_texture[e] = \
-                pyglet.graphics.TextureGroup(__secret_texture)
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
-        self.loadZombieClothesTextures()
-
-    def loadZombieClothesTextures(self):
-        for e, i in enumerate(os.listdir("textures/zombie_clothes")):
-            __secret_texture = pyglet.image.load("textures/zombie_clothes/" + i).get_texture()
-            self.zombie_clothes_texture[e] = \
-                pyglet.graphics.TextureGroup(__secret_texture)
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
-        self.loadZombieHandTextures()
-
-    def loadZombieHandTextures(self):
-        for e, i in enumerate(os.listdir("textures/zombie_hand")):
-            __secret_texture = pyglet.image.load("textures/zombie_hand/" + i).get_texture()
-            self.zombie_hand_texture[e] = \
-                pyglet.graphics.TextureGroup(__secret_texture)
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
-
     def vertexList(self):
         x, y, w, h = self.WIDTH / 2, self.HEIGHT / 2, self.WIDTH, self.HEIGHT
-        self.reticle = pyglet.graphics.vertex_list(4, ('v2f', (x - 10, y, x + 10, y, x, y - 10, x, y + 10)),
-                                                   ('c3f', (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)))
+        self.reticle = pyglet.graphics.vertex_list(
+            4,
+            ('v2f', (x - 10, y, x + 10, y, x, y - 10, x, y + 10)),
+            ('c3f', (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))
+        )
 
     def initScene(self):
         print("Init OpenGL scene...")
@@ -145,7 +100,6 @@ class Scene:
         glEnable(GL_DEPTH_TEST)
         glDepthFunc(GL_LESS)
         glShadeModel(GL_SMOOTH)
-        glMatrixMode(GL_PROJECTION)
         glDepthFunc(GL_LEQUAL)
         glAlphaFunc(GL_GEQUAL, 1)
         glEnable(GL_BLEND)
@@ -155,18 +109,20 @@ class Scene:
         glFogi(GL_FOG_MODE, GL_LINEAR)
         glEnable(GL_TEXTURE_2D)
 
-        glLoadIdentity()
         load_textures(self)
         self.loadPanoramaTextures()
         self.vertexList()
 
-        # We use a single batch for non‑block objects (particles, dropped items, panorama)
         self.stuffBatch = pyglet.graphics.Batch()
 
         self.player.inventory = Inventory(self)
-        # CubeHandler now handles chunk rendering with frustum culling
-        self.cubes = CubeHandler(None, self.block, None,
-                                 ('leaves_taiga', 'leaves_oak', 'tall_grass', 'nocolor', 'sapling'), self)
+        self.cubes = CubeHandler(
+            None,
+            self.block,
+            None,
+            ('leaves_taiga', 'leaves_oak', 'tall_grass', 'nocolor', 'sapling'),
+            self
+        )
 
         self.zombie = Zombie(self)
         self.zombie.position = [0, 100, 0]
@@ -178,8 +134,11 @@ class Scene:
         glMatrixMode(GL_PROJECTION)
         glLoadIdentity()
         gluOrtho2D(0, self.WIDTH, 0, self.HEIGHT)
+        glMatrixMode(GL_MODELVIEW)
+        glLoadIdentity()
 
     def set3d(self):
+        glMatrixMode(GL_PROJECTION)
         glLoadIdentity()
         gluPerspective(self.fov, (self.WIDTH / self.HEIGHT), 0.1, RENDER_DISTANCE)
         glMatrixMode(GL_MODELVIEW)
@@ -193,6 +152,11 @@ class Scene:
         glViewport(0, 0, w, h)
 
     def drawPanorama(self):
+        """Draw the panorama using immediate mode."""
+        if len(self.panorama) < 6:
+            print("Warning: Not all panorama textures loaded.")
+            return
+
         pp = self.player.position
         sx, sy, sz = 60, 60, 60
         x, y, z = pp[0] - (sx // 2), -(sy // 2), pp[2] - (sz // 2)
@@ -207,25 +171,26 @@ class Scene:
             (x, Y, Z, X, Y, Z, X, Y, z, x, Y, z),
         ]
 
-        tex_coords = ('t2f', (0, 0, 1, 0, 1, 1, 0, 1))
-        mode = GL_QUADS
-        self.stuffBatch.add(4, mode, self.panorama[2], ('v3f', vertexes[0]), tex_coords)
-        self.stuffBatch.add(4, mode, self.panorama[0], ('v3f', vertexes[1]), tex_coords)
-        self.stuffBatch.add(4, mode, self.panorama[3], ('v3f', vertexes[2]), tex_coords)
-        self.stuffBatch.add(4, mode, self.panorama[1], ('v3f', vertexes[3]), tex_coords)
-        self.stuffBatch.add(4, mode, self.panorama[5], ('v3f', vertexes[4]), tex_coords)
-        self.stuffBatch.add(4, mode, self.panorama[4], ('v3f', vertexes[5]), tex_coords)
+        for i, tex_group in enumerate(self.panorama.values()):
+            tex_id = tex_group.texture.id
+            glBindTexture(GL_TEXTURE_2D, tex_id)
+            glBegin(GL_QUADS)
+            v = vertexes[i]
+            glTexCoord2f(0, 0); glVertex3f(v[0], v[1], v[2])
+            glTexCoord2f(1, 0); glVertex3f(v[3], v[4], v[5])
+            glTexCoord2f(1, 1); glVertex3f(v[6], v[7], v[8])
+            glTexCoord2f(0, 1); glVertex3f(v[9], v[10], v[11])
+            glEnd()
 
     def genWorld(self):
         self.drawCounter += 1
         if self.drawCounter > self.genTime:
             self.drawCounter = 0
-        self.worldGen.genChunk(self.player, max_chunks_per_call=8, max_blocks_per_call=256)
+            self.worldGen.genChunk(self.player, max_chunks_per_call=8, max_blocks_per_call=256)
 
     def updateScene(self, dt):
         self.genWorld()
 
-        # Rebuild dirty chunks (max 2 per frame, closest first)
         self.cubes.rebuild_dirty_chunks(self.player.position)
 
         if self.in_water:
@@ -239,12 +204,10 @@ class Scene:
 
         self.set3d()
         glClearColor(self.skyColor[0] / 255, self.skyColor[1] / 255, self.skyColor[2] / 255, 1)
-
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
         glLoadIdentity()
 
         self.player.update(dt)
-        self.draw()
 
         self.clouds.update(dt)
         self.droppedBlock.update(dt)
@@ -269,21 +232,51 @@ class Scene:
             self.lookingAt = "Nothing"
 
         glColor3d(1, 1, 1)
-        glPopMatrix()
-        self.set2d()
 
+        self.set2d()
         self.blockSound.pickUpAlreadyPlayed = False
 
         for i in self.updateEvents:
             i()
 
-    def draw(self):
-        # Render all chunks (distance culling only, frustum disabled)
+        self.draw(dt)
+
+    def draw(self, dt=0.0):
+        self.set3d()
+        glLoadIdentity()
+        self.player.updateView()
+
         self.cubes.render(self.player.position)
 
-        # Draw non‑block objects (panorama, particles, dropped items)
+        for i in self.entity:
+            i.render(dt)
+
+        self.particles.drawParticles(dt)
+
         try:
             self.stuffBatch.draw()
         except pyglet.gl.lib.GLException:
             logging.exception("GL batch draw failed while rendering scene")
         self.stuffBatch = pyglet.graphics.Batch()
+
+        self.set2d()
+
+    def spawn_zombie(self):
+        """Spawn a zombie near the player (slightly above)."""
+        import random
+        from game.entity.Zombie import Zombie
+
+        if self.player is None:
+            print("No player to spawn near.")
+            return
+
+        px, py, pz = self.player.position
+        dx = random.randint(-4, 4)
+        dz = random.randint(-4, 4)
+        spawn_pos = [px + dx, py + 2, pz + dz]
+
+        zombie = Zombie(self)
+        zombie.position = spawn_pos
+        zombie.rotation[1] = random.randint(0, 360)
+        self.entity.append(zombie)
+        print(f"Zombie spawned at {spawn_pos}")

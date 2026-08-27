@@ -18,18 +18,18 @@ class Entity:
         self.playerFallY = 0
         self.kW, self.kS, self.kA, self.kD = 0, 0, 0, 0
         self.gl.allowEvents["collisions"] = True
-        self.speed = 0.02  # meters per second (for zombies)
+        self.speed = 0.02
         self.model = Model(gl)
 
     def update(self, dt):
-        self.model.drawModel(self.position, self.rotation)
         self.update_pos(dt)
+
+    def render(self, a):
+        self.model.drawModel(self.position, self.rotation)
 
     def update_pos(self, dt):
         DX, DY, DZ = 0, 0, 0
-        # No movement by default – override in subclasses
         self.position = [self.position[0] + DX, self.position[1] + DY, self.position[2] + DZ]
-        # Gravity and collision are applied in subclasses if needed
         if dt < 0.2:
             dt /= 10
             DX /= 10
@@ -68,7 +68,8 @@ class Entity:
 
         if self.bInAir and col2 in self.gl.cubes.cubes:
             hp = self.hp
-        self.position = col
+        # FIX: ensure position is a mutable list
+        self.position = list(col)
 
     def collide(self, pos):
         p = list(pos)

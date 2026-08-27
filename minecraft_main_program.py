@@ -340,7 +340,7 @@ def draw_main_menu(mc):
     glRotatef(mainMenuRotation[0], 1, 0, 0)
     glRotatef(mainMenuRotation[1], 0, 1, 0)
     glTranslatef(0, 0, 0)
-    scene.draw()
+    #scene.draw()
     scene.drawPanorama()
     glPopMatrix()
     scene.set2d()
@@ -694,6 +694,8 @@ while True:
                         player.cameraType += 1
                         if player.cameraType > 3:
                             player.cameraType = 1
+                    if event.key == pygame.K_z:
+                        scene.spawn_zombie()
                 if event.type == pygame.MOUSEBUTTONDOWN:
                     player.mouseEvent(event.button, dt)
                     if event.button == 4:

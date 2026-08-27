@@ -14,10 +14,10 @@ class Player:
         print("Init Player class...")
         self.is_spectator = False
         self.position, self.rotation = [x, y, z], rotation
-        self.speed = 4.0  # meters per second
+        self.speed = 4.0
         self.gl = gl
         self.gl.allowEvents.setdefault("collisions", True)
-        self.gravity = 5.8  # meters per second²
+        self.gravity = 5.8
         self.tVel = 50
         self.dy = 0
         self.shift = 0
@@ -43,12 +43,20 @@ class Player:
         fps = max(MAX_FPS, 30)
         return min(max(1.0 / fps, 0.016), 0.05)
 
+    def updateView(self):
+        """Apply the player's view transformation (camera). No push/pop – caller handles it."""
+        glRotatef(self.rotation[0], 1, 0, 0)
+        glRotatef(self.rotation[1], 0, 1, 0)
+        glTranslatef(-self.position[0],
+                     -self.position[1] + self.shift + self.cameraShake[0],
+                     -self.position[2])
+
     def setCameraShake(self, dt):
         if not self.canShake or self.shift > 0:
             return
 
         if not self.cameraShake[1]:
-            self.cameraShake[0] -= 0.007 * dt * 60  # normalized to 60 fps
+            self.cameraShake[0] -= 0.007 * dt * 60
             if self.cameraShake[0] < -0.1:
                 self.cameraShake[1] = True
         else:
@@ -92,7 +100,7 @@ class Player:
                 self.rotation[0] = -90
 
             DX, DY, DZ = 0, 0, 0
-            minKd = 0.08 * dt * 60  # scale with dt
+            minKd = 0.08 * dt * 60
 
             rotY = self.rotation[1] / 180 * math.pi
             key = pygame.key.get_pressed()
@@ -174,7 +182,6 @@ class Player:
                 self.setShift(False)
                 self.acceleration = 0
 
-            # Apply movement with substeps for stability
             sub_steps = 10
             sub_dt = dt / sub_steps
             DX_sub = DX / sub_steps
@@ -185,16 +192,9 @@ class Player:
         else:
             self.move(dt, 0, 0, 0)
 
-        glPushMatrix()
-        glRotatef(self.rotation[0], 1, 0, 0)
-        glRotatef(self.rotation[1], 0, 1, 0)
-        glTranslatef(-self.position[0],
-                     -self.position[1] + self.shift + self.cameraShake[0],
-                     -self.position[2])
-
     def jump(self):
         if not self.dy:
-            self.dy = 5.5  # initial jump velocity
+            self.dy = 5.5
 
     def move(self, dt, dx, dy, dz):
         if self.is_spectator:
@@ -218,7 +218,6 @@ class Player:
             if col2 in self.gl.cubes.cubes and self.shift <= 0:
                 self.gl.blockSound.playStepSound(self.gl.cubes.cubes[col2].name, custom=15)
 
-        # Dynamic FOV
         if self.position[0] != col[0] or self.position[2] != col[2]:
             if self.gl.fov < FOV + 20:
                 self.gl.fov += 0.2 * dt * 60

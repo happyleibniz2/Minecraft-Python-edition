@@ -1,6 +1,5 @@
 from OpenGL.GL import *
 
-
 class Model:
     def __init__(self, gl):
         self.cubes = []
@@ -12,11 +11,9 @@ class Model:
     def drawModel(self, pos, rot):
         for i in self.cubes:
             i = list(i)
-
             i[1] += pos[0]
             i[2] += pos[1]
             i[3] += pos[2]
-
             self.drawCube(*i)
 
     def drawCube(self, texture, x, y, z, w=1, h=1, d=1):
@@ -33,18 +30,15 @@ class Model:
 
         tex_coords = ('t2f', (0, 0, 1, 0, 1, 1, 0, 1))
         mode = GL_QUADS
-        self.gl.stuffBatch.add(4, mode, texture[2], ('v3f', vertexes[0]),
-                               tex_coords)  # back
-        self.gl.stuffBatch.add(4, mode, texture[0], ('v3f', vertexes[1]),
-                               tex_coords)  # front
 
-        self.gl.stuffBatch.add(4, mode, texture[3], ('v3f', vertexes[2]),
-                               tex_coords)  # left
-        self.gl.stuffBatch.add(4, mode, texture[1], ('v3f', vertexes[3]),
-                               tex_coords)  # right
+        if isinstance(texture, (list, tuple)):
+            tex0, tex1, tex2, tex3, tex4, tex5 = texture
+        else:
+            tex0 = tex1 = tex2 = tex3 = tex4 = tex5 = texture
 
-        self.gl.stuffBatch.add(4, mode, texture[5], ('v3f', vertexes[4]),
-                               tex_coords)  # bottom
-
-        self.gl.stuffBatch.add(4, mode, texture[4], ('v3f', vertexes[5]),
-                               tex_coords)  # top
+        self.gl.stuffBatch.add(4, mode, tex2, ('v3f', vertexes[0]), tex_coords)  # back
+        self.gl.stuffBatch.add(4, mode, tex0, ('v3f', vertexes[1]), tex_coords)  # front
+        self.gl.stuffBatch.add(4, mode, tex3, ('v3f', vertexes[2]), tex_coords)  # left
+        self.gl.stuffBatch.add(4, mode, tex1, ('v3f', vertexes[3]), tex_coords)  # right
+        self.gl.stuffBatch.add(4, mode, tex5, ('v3f', vertexes[4]), tex_coords)  # bottom
+        self.gl.stuffBatch.add(4, mode, tex4, ('v3f', vertexes[5]), tex_coords)  # top
