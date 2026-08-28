@@ -12,6 +12,26 @@ Using pygame opengl pyglet from PYTHON
 <img width="1257" height="752" alt="屏幕截图 2026-08-27 062459" src="https://github.com/user-attachments/assets/237020b5-7b7e-4a5f-8157-1ecd7b7d8a91" />
 <img width="1257" height="752" alt="屏幕截图 2026-08-27 062442" src="https://github.com/user-attachments/assets/a81cc5ba-d7df-4117-a164-b0f98d9fd8d3" />
 (the zombie is shy)
+<img width="1276" height="746" alt="image" src="https://github.com/user-attachments/assets/0c12cbcd-270c-4317-b0ed-4a1181dedb06" />
+
+## Features
+`Dirty chunk loading`
+
+`zombie mob`
+
+`simple zombie ai`
+
+`Better water texture`
+
+`Water physics (sort of)`
+
+`Fast terrain generation`
+
+`Player mining`
+
+`Spectator mode(sort of)`
+
+`tnt explosion`
 
 ## Blocks
 ```
