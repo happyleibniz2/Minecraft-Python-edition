@@ -16,45 +16,23 @@ class Frustum:
         and modelview matrices. Must be called each frame after setting
         the camera.
         """
-        # Get matrices (column-major)
-        proj = glGetFloatv(GL_PROJECTION_MATRIX)
-        modl = glGetFloatv(GL_MODELVIEW_MATRIX)
+        # PyOpenGL exposes OpenGL's column-major matrices transposed.
+        proj = np.asarray(glGetFloatv(GL_PROJECTION_MATRIX), dtype=np.float32).reshape(4, 4).T
+        modl = np.asarray(glGetFloatv(GL_MODELVIEW_MATRIX), dtype=np.float32).reshape(4, 4).T
+        clip = np.dot(proj, modl)
 
-        # Combine: clip = proj * modl (column-major)
-        # Flatten to a 16-element array for easy indexing
-        clip = np.dot(proj, modl).flatten()
-
-        # Extract planes as in RubyDung (row-major extraction)
         # Right plane
-        self.planes[0] = [clip[3] - clip[0],
-                          clip[7] - clip[4],
-                          clip[11] - clip[8],
-                          clip[15] - clip[12]]
+        self.planes[0] = clip[3] - clip[0]
         # Left plane
-        self.planes[1] = [clip[3] + clip[0],
-                          clip[7] + clip[4],
-                          clip[11] + clip[8],
-                          clip[15] + clip[12]]
+        self.planes[1] = clip[3] + clip[0]
         # Bottom plane
-        self.planes[2] = [clip[3] + clip[1],
-                          clip[7] + clip[5],
-                          clip[11] + clip[9],
-                          clip[15] + clip[13]]
+        self.planes[2] = clip[3] + clip[1]
         # Top plane
-        self.planes[3] = [clip[3] - clip[1],
-                          clip[7] - clip[5],
-                          clip[11] - clip[9],
-                          clip[15] - clip[13]]
+        self.planes[3] = clip[3] - clip[1]
         # Back plane
-        self.planes[4] = [clip[3] - clip[2],
-                          clip[7] - clip[6],
-                          clip[11] - clip[10],
-                          clip[15] - clip[14]]
+        self.planes[4] = clip[3] - clip[2]
         # Front plane
-        self.planes[5] = [clip[3] + clip[2],
-                          clip[7] + clip[6],
-                          clip[11] + clip[10],
-                          clip[15] + clip[14]]
+        self.planes[5] = clip[3] + clip[2]
 
         # Normalize each plane
         for i in range(6):
@@ -68,21 +46,10 @@ class Frustum:
         Returns True if visible, False if culled.
         (RubyDung's cubeInFrustum method)
         """
-        corners = [
-            (x0, y0, z0), (x1, y0, z0),
-            (x0, y1, z0), (x1, y1, z0),
-            (x0, y0, z1), (x1, y0, z1),
-            (x0, y1, z1), (x1, y1, z1)
-        ]
-
-        for p in range(6):
-            plane = self.planes[p]
-            inside = False
-            for corner in corners:
-                d = plane[0]*corner[0] + plane[1]*corner[1] + plane[2]*corner[2] + plane[3]
-                if d > 0:
-                    inside = True
-                    break
-            if not inside:
+        for plane in self.planes:
+            x = x1 if plane[0] >= 0 else x0
+            y = y1 if plane[1] >= 0 else y0
+            z = z1 if plane[2] >= 0 else z0
+            if plane[0] * x + plane[1] * y + plane[2] * z + plane[3] <= 0:
                 return False
         return True

@@ -74,15 +74,22 @@ class Scene:
         if not os.path.isdir(panorama_path):
             raise FileNotFoundError(f"Panorama directory not found: {panorama_path}")
 
-        for e, i in enumerate(sorted(os.listdir(panorama_path))):
+        image_files = [
+            i for i in sorted(os.listdir(panorama_path))
+            if os.path.isfile(os.path.join(panorama_path, i)) and i.lower().endswith((".png", ".jpg", ".jpeg"))
+        ]
+        if len(image_files) < 6:
+            raise ValueError(f"Panorama requires six images: {panorama_path}")
+
+        panorama = {}
+        for e, i in enumerate(image_files[:6]):
             image_path = os.path.join(panorama_path, i)
-            if not os.path.isfile(image_path):
-                continue
-            self.panorama[e] = pyglet.graphics.TextureGroup(pyglet.image.load(image_path).get_texture())
+            panorama[e] = pyglet.graphics.TextureGroup(pyglet.image.load(image_path).get_texture())
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
+        self.panorama = panorama
 
     def vertexList(self):
         x, y, w, h = self.WIDTH / 2, self.HEIGHT / 2, self.WIDTH, self.HEIGHT
@@ -152,41 +159,52 @@ class Scene:
         glViewport(0, 0, w, h)
 
     def drawPanorama(self):
-        """Draw the panorama using immediate mode."""
+        """Draw a Minecraft-style cubemap centered on the camera."""
         if len(self.panorama) < 6:
             print("Warning: Not all panorama textures loaded.")
             return
 
-        pp = self.player.position
-        sx, sy, sz = 60, 60, 60
-        x, y, z = pp[0] - (sx // 2), -(sy // 2), pp[2] - (sz // 2)
-        X, Y, Z = x + sx, y + sy, z + sz
+        size = 1
+        faces = (
+            ((-size, -size, -size), ( size, -size, -size), ( size,  size, -size), (-size,  size, -size)),
+            (( size, -size, -size), ( size, -size,  size), ( size,  size,  size), ( size,  size, -size)),
+            (( size, -size,  size), (-size, -size,  size), (-size,  size,  size), ( size,  size,  size)),
+            ((-size, -size,  size), (-size, -size, -size), (-size,  size, -size), (-size,  size,  size)),
+            ((-size,  size, -size), ( size,  size, -size), ( size,  size,  size), (-size,  size,  size)),
+            ((-size, -size,  size), ( size, -size,  size), ( size, -size, -size), (-size, -size, -size)),
+        )
+        tex_coords = ((0, 0), (1, 0), (1, 1), (0, 1))
 
-        vertexes = [
-            (X, y, z, x, y, z, x, Y, z, X, Y, z),
-            (x, y, Z, X, y, Z, X, Y, Z, x, Y, Z),
-            (x, y, z, x, y, Z, x, Y, Z, x, Y, z),
-            (X, y, Z, X, y, z, X, Y, z, X, Y, Z),
-            (x, y, z, X, y, z, X, y, Z, x, y, Z),
-            (x, Y, Z, X, Y, Z, X, Y, z, x, Y, z),
-        ]
+        glPushAttrib(GL_ENABLE_BIT | GL_DEPTH_BUFFER_BIT | GL_TEXTURE_BIT | GL_CURRENT_BIT)
+        try:
+            glDisable(GL_DEPTH_TEST)
+            glDepthMask(GL_FALSE)
+            glDisable(GL_FOG)
+            glDisable(GL_BLEND)
+            glDisable(GL_CULL_FACE)
+            glEnable(GL_TEXTURE_2D)
+            glColor4f(1, 1, 1, 1)
 
-        for i, tex_group in enumerate(self.panorama.values()):
-            tex_id = tex_group.texture.id
-            glBindTexture(GL_TEXTURE_2D, tex_id)
-            glBegin(GL_QUADS)
-            v = vertexes[i]
-            glTexCoord2f(0, 0); glVertex3f(v[0], v[1], v[2])
-            glTexCoord2f(1, 0); glVertex3f(v[3], v[4], v[5])
-            glTexCoord2f(1, 1); glVertex3f(v[6], v[7], v[8])
-            glTexCoord2f(0, 1); glVertex3f(v[9], v[10], v[11])
-            glEnd()
+            for i, vertices in enumerate(faces):
+                glBindTexture(GL_TEXTURE_2D, self.panorama[i].texture.id)
+                glBegin(GL_QUADS)
+                for (u, v), (x, y, z) in zip(tex_coords, vertices):
+                    glTexCoord2f(u, v)
+                    glVertex3f(x, y, z)
+                glEnd()
+        finally:
+            glPopAttrib()
 
     def genWorld(self):
         self.drawCounter += 1
         if self.drawCounter > self.genTime:
             self.drawCounter = 0
-            self.worldGen.genChunk(self.player, max_chunks_per_call=8, max_blocks_per_call=256)
+            initial_generation = self.genTime <= 1
+            self.worldGen.genChunk(
+                self.player,
+                max_chunks_per_call=8 if initial_generation else 1,
+                max_blocks_per_call=1024 if initial_generation else 256,
+            )
 
     def updateScene(self, dt):
         self.genWorld()
@@ -215,7 +233,6 @@ class Scene:
         for i in self.entity:
             i.update(dt)
 
-        self.particles.drawParticles(dt)
         self.light.update()
 
         blockByVec = self.cubes.hitTest(self.player.position, self.player.get_sight_vector())

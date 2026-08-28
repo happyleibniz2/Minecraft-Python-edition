@@ -30,25 +30,23 @@ class worldGenerator:
             return
         self.blocks[p] = t
         self.loading.append((p, t))
-        self.gl.cubes.add(p, t)
 
     def genChunk(self, player, max_chunks_per_call=8, max_blocks_per_call=256):
         if player.hp == -1:
             player.hp = 20
 
+        pending_limit = max_blocks_per_call * 4
         chunks_processed = 0
-        while self.queue and chunks_processed < max_chunks_per_call:
+        while (self.queue and chunks_processed < max_chunks_per_call and
+               len(self.loading) < pending_limit):
             self.gen(*self.queue.popleft())
             chunks_processed += 1
 
         block_budget = max_blocks_per_call
         while self.loading and block_budget > 0:
             p, t = self.loading.popleft()
-            if p in self.gl.cubes.cubes:
-                try:
-                    self.gl.cubes.updateCube(self.gl.cubes.cubes[p])
-                except Exception:
-                    pass
+            if p not in self.gl.cubes.cubes:
+                self.gl.cubes.add(p, t)
             block_budget -= 1
 
     def gen(self, xx, zz):

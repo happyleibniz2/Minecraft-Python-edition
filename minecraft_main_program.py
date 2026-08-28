@@ -170,33 +170,24 @@ def draw_command(mc):
     clock.tick(MAX_FPS)
 
 def draw_panorama_menu(mc):
-    def cpt_16x():
+    def set_panorama(path):
         log_deb("changing panorama...")
-        with open("assets/Minecraft/panorama.txt", "w") as f:
-            f.write(fr"assets/Minecraft/textures/gui/title/background/16x/")
-            f.close()
+        with open("assets/Minecraft/panorama.txt", "w", encoding="utf-8") as panorama_file:
+            panorama_file.write(path)
+        scene.loadPanoramaTextures()
         print("done")
+
+    def cpt_16x():
+        set_panorama("assets/Minecraft/textures/gui/title/background/16x/")
 
     def cpt_17x():
-        log_deb("changing panorama...")
-        with open("assets/Minecraft/panorama.txt", "w") as f:
-            f.write(fr"assets/Minecraft/textures/gui/title/background/17x/")
-            f.close()
-        print("done")
+        set_panorama("assets/Minecraft/textures/gui/title/background/17x/")
 
     def cpt_120x():
-        log_deb("changing panorama...")
-        with open("assets/Minecraft/panorama.txt", "w") as f:
-            f.write(fr"assets/Minecraft/textures/gui/title/background/120x/")
-            f.close()
-        print("done")
+        set_panorama("assets/Minecraft/textures/gui/title/background/120x/")
 
     def rp():
-        log_deb("changing panorama...")
-        with open("assets/Minecraft/panorama.txt", "w") as f:
-            f.write("gui/bg/")
-            f.close()
-        print("done")
+        set_panorama("gui/bg/")
 
     scene.set2d()
     tex = gui.GUI_TEXTURES["options_background"]
@@ -330,6 +321,8 @@ def gen_world(mc):
 
 def draw_main_menu(mc):
     global mainMenuRotation, IN_MENU, PAUSE
+    mainMenuRotation[0] = 20 + math.sin(time.perf_counter() * 0.05) * 25
+    mainMenuRotation[1] = (mainMenuRotation[1] - 2 * dt) % 360
     glFogfv(GL_FOG_COLOR, (GLfloat * 4)(0.5, 0.7, 1, 1))
     glFogf(GL_FOG_START, 0)
     glFogf(GL_FOG_END, 1000)
@@ -377,8 +370,6 @@ def draw_main_menu(mc):
                   label_color=(255, 255, 0), shadow_color=(63, 63, 0))
     glPopMatrix()
     pygame.display.flip()
-    mainMenuRotation[0] = 0
-    mainMenuRotation[1] += 0.035
     pyglet.gl.glViewport(0, 0, WIDTH, HEIGHT)
 
 if settings.DEBUG:
@@ -596,7 +587,7 @@ respawnButton = Button(scene, translations["respawn"], 0, 0)
 respawnButton.setEvent(respawn)
 
 print("Loading complete!")
-mainMenuRotation = [50, 180, True]
+mainMenuRotation = [20, 180]
 mainFunction = draw_main_menu
 
 # Delta time variables
@@ -620,10 +611,13 @@ while True:
     keys = []
 
     for event in pygame.event.get():
-        if event.type == pygame.MOUSEMOTION:
-            x, y = pygame.mouse.get_rel()
-            player.rotation[0] += y
-            player.rotation[1] += x
+        if event.type == pygame.MOUSEMOTION and not PAUSE and not IN_MENU:
+            can_look = (scene.allowEvents["keyboardAndMouse"] and
+                        scene.allowEvents["movePlayer"] and
+                        scene.allowEvents["grabMouse"])
+            center = (scene.WIDTH // 2, scene.HEIGHT // 2)
+            if can_look and event.pos != center:
+                player.look(*event.rel)
         if event.type == pygame.QUIT:
             exit()
         if event.type == pygame.KEYUP:

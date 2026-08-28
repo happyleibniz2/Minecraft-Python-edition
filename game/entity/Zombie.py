@@ -37,22 +37,53 @@ class Zombie(Entity):
         ]
 
         self.time = 0
+        self.follow_range = 32
+        self.stop_distance = 1
+        self.jump_velocity = 5.5
+        self.jump_cooldown = 0
 
     def update(self, dt):
         self.time += dt * 10
+        self.jump_cooldown = max(0, self.jump_cooldown - dt)
 
-        # Chase player
-        if hasattr(self.gl, 'player'):
-            dx = self.gl.player.position[0] - self.position[0]
-            dz = self.gl.player.position[2] - self.position[2]
+        move_x = 0
+        move_z = 0
+        player = getattr(self.gl, 'player', None)
+        if player is not None and not getattr(player, 'playerDead', False):
+            dx = player.position[0] - self.position[0]
+            dz = player.position[2] - self.position[2]
             dist = math.hypot(dx, dz)
-            if dist > 0.1:
-                step = min(self.speed * dt * 60, dist)
-                self.position[0] += (dx / dist) * step
-                self.position[2] += (dz / dist) * step
+            if dist > 0:
                 self.rotation[1] = math.degrees(math.atan2(dx, dz))
+            if self.stop_distance < dist <= self.follow_range:
+                step = min(self.speed * dt * 60, dist - self.stop_distance)
+                move_x = dx / dist * step
+                move_z = dz / dist * step
 
-        super().update(dt)
+        sub_steps = 10
+        sub_dt = dt / sub_steps
+        step_x = move_x / sub_steps
+        step_z = move_z / sub_steps
+        for _ in range(sub_steps):
+            was_grounded = self._is_grounded()
+            target_x = self.position[0] + step_x
+            target_z = self.position[2] + step_z
+            self.move(sub_dt, step_x, 0, step_z)
+
+            blocked = (abs(self.position[0] - target_x) > 1e-5 or
+                       abs(self.position[2] - target_z) > 1e-5)
+            if blocked and was_grounded and self.jump_cooldown == 0:
+                self.dy = self.jump_velocity
+                self.jump_cooldown = 0.35
+
+        self.bInAir = not self._is_grounded()
+
+    def _is_grounded(self):
+        if self.dy > 0:
+            return False
+        x, y, z = self.position
+        probe_y = y - 0.05
+        return self.collide((x, probe_y, z))[1] > probe_y + 1e-5
 
     def render(self, a):
         glEnable(GL_TEXTURE_2D)

@@ -23,7 +23,7 @@ class CubeHandler:
 
         # Render chunks
         self.render_chunks = {}
-        self.RENDER_CHUNK_SIZE = (8, 8, 8)
+        self.RENDER_CHUNK_SIZE = (16, 16, 16)
         self.max_rebuilds_per_frame = 2
 
         # Frustum culling (kept but disabled)
@@ -173,8 +173,7 @@ class CubeHandler:
         if render_distance is None:
             render_distance = settings.CHUNKS_RENDER_DISTANCE
 
-        # Frustum culling – DISABLED (kept for future)
-        # self.frustum.extract()
+        self.frustum.extract()
 
         for chunk in self.render_chunks.values():
             # Distance check – only if culling is enabled
@@ -188,14 +187,13 @@ class CubeHandler:
                 if dx*dx + dy*dy + dz*dz > render_distance*render_distance:
                     continue
 
-            # Frustum culling – DISABLED (code kept for later)
-            # x0 = chunk.cx * self.RENDER_CHUNK_SIZE[0]
-            # y0 = chunk.cy * self.RENDER_CHUNK_SIZE[1]
-            # z0 = chunk.cz * self.RENDER_CHUNK_SIZE[2]
-            # x1 = x0 + self.RENDER_CHUNK_SIZE[0]
-            # y1 = y0 + self.RENDER_CHUNK_SIZE[1]
-            # z1 = z0 + self.RENDER_CHUNK_SIZE[2]
-            # if not self.frustum.cube_in_frustum(x0, y0, z0, x1, y1, z1):
-            #     continue
+            x0 = chunk.cx * self.RENDER_CHUNK_SIZE[0] - 0.5
+            y0 = chunk.cy * self.RENDER_CHUNK_SIZE[1] - 0.5
+            z0 = chunk.cz * self.RENDER_CHUNK_SIZE[2] - 0.5
+            x1 = x0 + self.RENDER_CHUNK_SIZE[0]
+            y1 = y0 + self.RENDER_CHUNK_SIZE[1]
+            z1 = z0 + self.RENDER_CHUNK_SIZE[2]
+            if not self.frustum.cube_in_frustum(x0, y0, z0, x1, y1, z1):
+                continue
 
             chunk.render()

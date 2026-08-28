@@ -88,17 +88,6 @@ class Player:
             self.gl.player.inventory.addBlock("log_oak")
 
         if self.gl.allowEvents["movePlayer"]:
-            rdx, rdy = pygame.mouse.get_pos()
-            rdx, rdy = rdx - self.gl.WIDTH // 2, rdy - self.gl.HEIGHT // 2
-            rdx /= 8
-            rdy /= 8
-            self.rotation[0] += rdy
-            self.rotation[1] += rdx
-            if self.rotation[0] > 90:
-                self.rotation[0] = 90
-            elif self.rotation[0] < -90:
-                self.rotation[0] = -90
-
             DX, DY, DZ = 0, 0, 0
             minKd = 0.08 * dt * 60
 
@@ -172,6 +161,7 @@ class Player:
                         self.kD = 2
                     self.jump()
 
+            sneaking = key[pygame.K_LSHIFT] and not self.is_spectator
             if key[pygame.K_LSHIFT]:
                 if self.is_spectator:
                     self.position[1] -= 0.05 * dt * 60
@@ -182,15 +172,55 @@ class Player:
                 self.setShift(False)
                 self.acceleration = 0
 
+            if sneaking:
+                DX *= 0.3
+                DZ *= 0.3
+
             sub_steps = 10
             sub_dt = dt / sub_steps
             DX_sub = DX / sub_steps
             DZ_sub = DZ / sub_steps
             for _ in range(sub_steps):
-                self.move(sub_dt, DX_sub, 0, DZ_sub)
+                move_x = DX_sub
+                move_z = DZ_sub
+                sneak_grounded = (sneaking and self.dy <= 0 and
+                                   self._has_support(self.position[0], self.position[1], self.position[2]))
+                if sneak_grounded:
+                    move_x, move_z = self._limit_sneak_movement(move_x, move_z)
+                ground_y = self.position[1]
+                self.move(sub_dt, move_x, 0, move_z)
+                if sneak_grounded and self._has_support(self.position[0], ground_y, self.position[2]):
+                    self.position = (self.position[0], ground_y, self.position[2])
+                    self.dy = 0
+                    self.bInAir = False
 
         else:
             self.move(dt, 0, 0, 0)
+
+    def look(self, dx, dy):
+        self.rotation[0] = max(-90, min(90, self.rotation[0] + dy))
+        self.rotation[1] += dx
+
+    def _has_support(self, x, y, z):
+        support_y = round(y - 1.75)
+        if abs(y - (support_y + 1.75)) > 0.1:
+            return False
+
+        for offset_x in (-0.24, 0.24):
+            for offset_z in (-0.24, 0.24):
+                if roundPos((x + offset_x, support_y, z + offset_z)) in self.gl.cubes.collidable:
+                    return True
+        return False
+
+    def _limit_sneak_movement(self, dx, dz):
+        x, y, z = self.position
+        if self._has_support(x + dx, y, z + dz):
+            return dx, dz
+        if dx and self._has_support(x + dx, y, z):
+            return dx, 0
+        if dz and self._has_support(x, y, z + dz):
+            return 0, dz
+        return 0, 0
 
     def jump(self):
         if not self.dy:
@@ -228,8 +258,6 @@ class Player:
                 self.gl.fov -= 0.2 * dt * 60
             else:
                 self.gl.fov = FOV
-        self.gl.set3d()
-
         if not self.bInAir:
             for i in range(1, 6):
                 col21 = roundPos((col[0], col[1] - i, col[2]))

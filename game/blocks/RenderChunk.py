@@ -3,6 +3,12 @@ from OpenGL.GL import *
 from functions import cube_vertices
 
 class RenderChunk:
+    FACE_DIRECTIONS = (
+        (-1, 0, 0, 0), (1, 0, 0, 1),
+        (0, -1, 0, 2), (0, 1, 0, 3),
+        (0, 0, -1, 4), (0, 0, 1, 5),
+    )
+
     def __init__(self, cx, cy, cz, size, gl):
         self.cx, self.cy, self.cz = cx, cy, cz
         self.size = size  # (wx, wy, wz) in blocks
@@ -30,26 +36,25 @@ class RenderChunk:
         # We'll batch faces per cube
         for pos, cube in self.cubes.items():
             x, y, z = pos
-            # Check each of 6 faces
-            face_dirs = [
-                (-1,0,0,0), (1,0,0,1), (0,-1,0,2), (0,1,0,3), (0,0,-1,4), (0,0,1,5)
-            ]
-            for dx, dy, dz, fi in face_dirs:
+            vertices = None
+            for dx, dy, dz, fi in self.FACE_DIRECTIONS:
                 neighbour = (x+dx, y+dy, z+dz)
                 if neighbour not in global_cubes:
-                    self._add_face(cube, fi, handler)
+                    if vertices is None:
+                        vertices = cube_vertices(pos)
+                    self._add_face(cube, fi, handler, vertices[fi])
                 else:
                     nb = global_cubes[neighbour]
                     if nb.type in ('alpha', 'blend'):
-                        self._add_face(cube, fi, handler)
+                        if vertices is None:
+                            vertices = cube_vertices(pos)
+                        self._add_face(cube, fi, handler, vertices[fi])
 
         self.dirty = False
 
-    def _add_face(self, cube, face_index, handler):
+    def _add_face(self, cube, face_index, handler, face_vertices):
         """Add a single face quad to the batch."""
         tex_group = cube.t[face_index]
-        vertices = cube_vertices(cube.p)
-        face_vertices = vertices[face_index]
 
         # Use appropriate color
         if face_index == 3:   # top
