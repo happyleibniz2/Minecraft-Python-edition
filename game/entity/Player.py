@@ -340,10 +340,15 @@ class Player:
                 if water_pos not in (player_pos, player_head):
                     self.gl.cubes.place_water_source(water_pos)
                 return
-            if blockByVec[1]:
+            placement = blockByVec[1]
+            if placement is None:
+                fluid_hit = self.gl.cubes.hitTest(self.position, self.get_sight_vector(), include_fluids=True)
+                if fluid_hit[0] in self.gl.cubes.fluids:
+                    placement = fluid_hit[0]
+            if placement:
                 playerPos = tuple(roundPos((self.position[0], self.position[1] - 1, self.position[2])))
                 playerPos2 = tuple(roundPos((self.position[0], self.position[1], self.position[2])))
-                blockByVec = blockByVec[1][0], blockByVec[1][1], blockByVec[1][2]
+                blockByVec = placement[0], placement[1], placement[2]
                 if self.inventory.inventory[self.inventory.activeInventory][0] in self.gl.block and \
                         self.inventory.inventory[self.inventory.activeInventory][1] and blockByVec != playerPos and \
                         blockByVec != playerPos2:

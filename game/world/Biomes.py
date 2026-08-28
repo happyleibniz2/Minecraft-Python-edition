@@ -49,7 +49,7 @@ class Biomes:
         if self.biome == "desert":
             return "sand"
         if self.biome == "ocean":
-            return "water"
+            return "sand"
         if self.biome == "forest" :
             return "grass"
         if self.biome == "taiga":
@@ -71,7 +71,7 @@ class Biomes:
                 or self.biome == "big_mountains":
             return "dirt"
         if self.biome == "ocean":
-            return "water"
+            return "sand"
         return "dirt"
 
     def getBiomeStone(self):

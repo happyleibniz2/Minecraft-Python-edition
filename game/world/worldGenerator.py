@@ -7,6 +7,8 @@ from settings import *
 
 
 class worldGenerator:
+    SEA_LEVEL = CHUNK_SIZE[1] - 2
+
     def __init__(self, glClass, seed=43242):
         self.seed = seed
         self.chunks = {}
@@ -67,14 +69,24 @@ class worldGenerator:
                         y = int((oldY + y) / 2)
                 oldY = y
                 y += sy
+                is_ocean = activeBiome.biome == "ocean"
+                if is_ocean:
+                    y = min(y, self.SEA_LEVEL - 3)
                 ch = 70
                 if activeBiome.biome in ["forest", "taiga"]:
                     ch = 50
 
-                spawnTree = random.randint(0, ch) == 20 and y > sy - 5
+                spawnTree = random.randint(0, ch) == 20 and y > sy - 5 and not is_ocean
 
-                self.add((x, y, z), activeBiome.getBiomeGrass())
-                if self.gl.startPlayerPos == [0, -9000, 0] and not spawnTree:
+                surface = activeBiome.getBiomeGrass()
+                if is_ocean:
+                    surface = activeBiome.getBiomeStone()
+                self.add((x, y, z), surface)
+
+                if is_ocean:
+                    for water_y in range(y + 1, self.SEA_LEVEL + 1):
+                        self.add((x, water_y, z), "water")
+                elif self.gl.startPlayerPos == [0, -9000, 0] and not spawnTree:
                     self.gl.startPlayerPos = [x, y + 2, z]
                     self.gl.player.position = [x, y + 2, z]
                     self.gl.player.lastPlayerPosOnGround = [x, y + 2, z]
@@ -123,6 +135,64 @@ class worldGenerator:
         if random.randint(0, 180) == 54:
             return "gravel"
         return "dirt"
+
+    UNSAFE_GROUND = ("water", "lava", "cactus", "tnt")
+    FOLIAGE = ("sapling", "tall_grass")
+
+    def find_safe_spawn(self, center_x=None, center_z=None, radius=48):
+        cubes = self.gl.cubes.cubes
+        if not cubes:
+            return None
+
+        if center_x is None or center_z is None:
+            origin = self.gl.startPlayerPos
+            if origin and origin[1] > -9000:
+                center_x = round(origin[0]) if center_x is None else center_x
+                center_z = round(origin[2]) if center_z is None else center_z
+            else:
+                center_x = 0 if center_x is None else center_x
+                center_z = 0 if center_z is None else center_z
+
+        best = None
+        best_score = None
+        for x, z in self._spiral_columns(center_x, center_z, radius):
+            candidate = self._column_spawn(x, z)
+            if candidate is None:
+                continue
+            distance = abs(x - center_x) + abs(z - center_z)
+            score = (distance, -candidate[1])
+            if best_score is None or score < best_score:
+                best = candidate
+                best_score = score
+                if distance == 0:
+                    break
+        return best
+
+    def _spiral_columns(self, center_x, center_z, radius):
+        yield center_x, center_z
+        for r in range(1, radius + 1):
+            for offset in range(-r, r + 1):
+                yield center_x + offset, center_z - r
+                yield center_x + offset, center_z + r
+            for offset in range(-r + 1, r):
+                yield center_x - r, center_z + offset
+                yield center_x + r, center_z + offset
+
+    def _column_spawn(self, x, z):
+        cubes = self.gl.cubes.cubes
+        top = self.SEA_LEVEL + 40
+        for y in range(top, 0, -1):
+            ground = cubes.get((x, y, z))
+            if ground is None:
+                continue
+            if ground.name in self.UNSAFE_GROUND or ground.name.startswith("leaves"):
+                return None
+            if ground.name in self.FOLIAGE:
+                continue
+            if any((x, y + offset, z) in cubes for offset in (1, 2, 3)):
+                return None
+            return [x, y + 2, z]
+        return None
 
     def spawnTree(self, x, y, z):
         treeHeight = random.randint(5, 7)

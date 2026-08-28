@@ -62,12 +62,17 @@ class CubeHandler:
             x, y, z = x + dx, y + dy, z + dz
         return None, None
 
+    REPLACEABLE = ("water", "lava")
+
     def add(self, p, t, now=False, fluid_level=0, fluid_source=None, fluid_falling=False):
         if p in self.cubes:
             if t == "water" and self.cubes[p].name == "water":
                 source = fluid_level == 0 and not fluid_falling if fluid_source is None else fluid_source
                 self._set_water_state(p, FluidState(fluid_level, source, fluid_falling))
-            return
+                return
+            if t == "water" or self.cubes[p].name not in self.REPLACEABLE:
+                return
+            self._clear_fluid(p)
         cube = self.cubes[p] = Cube(t, p, self.block[t],
                                     'alpha' if t in self.alpha_textures else 'blend' if (t == 'water' or t == "lava") else 'solid')
 
@@ -135,6 +140,13 @@ class CubeHandler:
         if was_water or cube.name != "water":
             self._schedule_adjacent_water(p)
 
+    def _clear_fluid(self, p):
+        self.fluids.pop(p, None)
+        self.cubes.pop(p, None)
+        chunk = self.render_chunks.get(self._get_chunk_key(p))
+        if chunk is not None:
+            chunk.remove_cube(p)
+
     def place_water_source(self, p):
         if p in self.cubes and self.cubes[p].name != "water":
             return False
@@ -180,11 +192,49 @@ class CubeHandler:
         if can_fall:
             self._flow_water_into(below, FluidState(state.level, False, True))
 
-        if state.source or (not can_fall and (state.falling or state.level < 7)):
+        if can_fall:
+            return
+
+        if state.source or state.falling or state.level < 7:
             next_level = 1 if state.source or state.falling else state.level + 1
             if next_level <= 7:
-                for dx, dz in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                for dx, dz in self._preferred_flow_directions(p):
                     self._flow_water_into((x + dx, y, z + dz), FluidState(next_level, False, False))
+
+    def _preferred_flow_directions(self, p, max_distance=4):
+        weights = {}
+        for direction in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+            dx, dz = direction
+            target = (p[0] + dx, p[1], p[2] + dz)
+            if not self._can_water_enter(target):
+                continue
+            weights[direction] = self._flow_weight(target, max_distance)
+        if not weights:
+            return ()
+        lowest = min(weights.values())
+        return tuple(direction for direction, weight in weights.items() if weight == lowest)
+
+    def _flow_weight(self, start, max_distance):
+        if self._can_water_enter((start[0], start[1] - 1, start[2])):
+            return 0
+
+        visited = {start}
+        frontier = [start]
+        for distance in range(1, max_distance + 1):
+            next_frontier = []
+            for position in frontier:
+                for dx, dz in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                    neighbour = (position[0] + dx, position[1], position[2] + dz)
+                    if neighbour in visited or not self._can_water_enter(neighbour):
+                        continue
+                    if self._can_water_enter((neighbour[0], neighbour[1] - 1, neighbour[2])):
+                        return distance
+                    visited.add(neighbour)
+                    next_frontier.append(neighbour)
+            frontier = next_frontier
+            if not frontier:
+                break
+        return 1000
 
     def _incoming_water_state(self, p):
         x, y, z = p
