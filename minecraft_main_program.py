@@ -604,9 +604,6 @@ while True:
 
     pyglet.options['debug_gl'] = False
     pygame.display.set_caption(f"Minecraft {MC_VERSION} {clock.get_fps()}")
-    if scene.allowEvents["keyboardAndMouse"] and not PAUSE:
-        if pygame.mouse.get_pressed(3)[0]:
-            player.mouseEvent(1, dt)
     mbclicked = None
     keys = []
 
@@ -617,18 +614,9 @@ while True:
                         scene.allowEvents["grabMouse"])
             center = (scene.WIDTH // 2, scene.HEIGHT // 2)
             if can_look and event.pos != center:
-                player.look(*event.rel)
+                player.queue_look(*event.rel)
         if event.type == pygame.QUIT:
             exit()
-        if event.type == pygame.KEYUP:
-            if event.key == pygame.K_w:
-                player.kW = 0
-            if event.key == pygame.K_s:
-                player.kS = 0
-            if event.key == pygame.K_a:
-                player.kA = 0
-            if event.key == pygame.K_d:
-                player.kD = 0
         if event.type == pygame.KEYDOWN:
             keys.append(event.key)
             if event.key == pygame.K_F11:
@@ -690,8 +678,13 @@ while True:
                             player.cameraType = 1
                     if event.key == pygame.K_z:
                         scene.spawn_zombie()
+                    if event.key == pygame.K_p:
+                        player.is_spectator = not player.is_spectator
+                    if event.key == pygame.K_l:
+                        player.give_debug_items()
                 if event.type == pygame.MOUSEBUTTONDOWN:
-                    player.mouseEvent(event.button, dt)
+                    if event.button in (2, 3):
+                        player.mouseEvent(event.button, dt)
                     if event.button == 4:
                         player.inventory.activeInventory -= 1
                         if player.inventory.activeInventory < 0:
@@ -704,16 +697,17 @@ while True:
                             player.inventory.activeInventory = 0
                         if player.inventory.inventory[player.inventory.activeInventory][1]:
                             gui.showText(player.inventory.inventory[player.inventory.activeInventory][0])
-                else:
-                    if pygame.mouse.get_pressed(3)[0]:
-                        player.mouseEvent(1, dt)
-                    else:
-                        player.mouseEvent(-1, dt)
 
-    if scene.allowEvents["grabMouse"]:
-        pygame.mouse.set_visible(PAUSE)
-    else:
-        pygame.mouse.set_visible(True)
+    gameplay_input = (not PAUSE and not IN_MENU and
+                      scene.allowEvents["keyboardAndMouse"] and
+                      scene.allowEvents["movePlayer"])
+    if gameplay_input:
+        player.mouseEvent(1 if pygame.mouse.get_pressed(3)[0] else -1, dt)
+
+    grab_mouse = (gameplay_input and scene.allowEvents["grabMouse"] and
+                  pygame.mouse.get_focused())
+    pygame.event.set_grab(grab_mouse)
+    pygame.mouse.set_visible(not grab_mouse)
 
     if IN_MENU:
         mainFunction(mbclicked)
@@ -724,7 +718,7 @@ while True:
             gui.shows["crosshair"][1] = (scene.WIDTH // 2 - 9, scene.HEIGHT // 2 - 9)
         else:
             gui.shows["crosshair"][1] = (-100, -100)
-        if scene.allowEvents["grabMouse"] and pygame.mouse.get_focused():
+        if grab_mouse:
             pygame.mouse.set_pos((scene.WIDTH // 2, scene.HEIGHT // 2))
         scene.updateScene(dt)
         player.inventory.draw()

@@ -8,13 +8,17 @@ from game.blocks.DestroyBlock import DestroyBlock
 from settings import *
 
 class Player:
+    WALK_SPEED = 4.317
+    SPRINT_MULTIPLIER = 1.3
+    SNEAK_MULTIPLIER = 0.3
+
     def __init__(self, x=0, y=0, z=0, rotation=None, gl=None):
         if rotation is None:
             rotation = [0, 0]
         print("Init Player class...")
         self.is_spectator = False
         self.position, self.rotation = [x, y, z], rotation
-        self.speed = 4.0
+        self.speed = self.WALK_SPEED
         self.gl = gl
         self.gl.allowEvents.setdefault("collisions", True)
         self.gravity = 5.8
@@ -23,10 +27,12 @@ class Player:
         self.shift = 0
         self.cameraShake = [0, False]
         self.canShake = True
-        self.acceleration = 0.0
-        self.current_move_speed = 0.0
         self.lastShiftPos = self.position
         self.cameraType = 1
+        self.is_sprinting = False
+        self.mouse_sensitivity = MOUSE_SENSITIVITY
+        self._mouse_dx = 0.0
+        self._mouse_dy = 0.0
         self.hp = -1
         self.bInAir = False
         self.playerDead = False
@@ -35,7 +41,6 @@ class Player:
         self.lastPlayerPosOnGround = [0, 0, 0]
         self.playerFallY = 0
 
-        self.kW, self.kS, self.kA, self.kD = 0, 0, 0, 0
         self.gl.allowEvents["collisions"] = True
 
     @staticmethod
@@ -64,142 +69,116 @@ class Player:
             if self.cameraShake[0] > 0.1:
                 self.cameraShake[1] = False
 
-    def setShift(self, b):
-        if b:
-            if self.shift < 0.17:
-                self.shift += 0.05
-        else:
-            if self.shift > 0:
-                self.shift -= 0.05
+    def setShift(self, enabled, dt):
+        target = 0.17 if enabled else 0
+        step = 1.5 * dt
+        if self.shift < target:
+            self.shift = min(target, self.shift + step)
+        elif self.shift > target:
+            self.shift = max(target, self.shift - step)
 
     def updatePosition(self, dt):
-        if pygame.key.get_pressed()[pygame.K_p]:
-            self.is_spectator = not self.is_spectator
-        if pygame.key.get_pressed()[pygame.K_l]:
-            self.gl.player.inventory.addBlock("grass")
-            self.gl.player.inventory.addBlock("stone")
-            self.gl.player.inventory.addBlock("log_birch")
-            self.gl.player.inventory.addBlock("cactus")
-            self.gl.player.inventory.addBlock("water")
-            self.gl.player.inventory.addBlock("crafting_table")
-            self.gl.player.inventory.addBlock("debug")
-            self.gl.player.inventory.addBlock("ancient_debris")
-            self.gl.player.inventory.addBlock("tnt")
-            self.gl.player.inventory.addBlock("log_oak")
-
-        if self.gl.allowEvents["movePlayer"]:
-            DX, DY, DZ = 0, 0, 0
-            minKd = 0.08 * dt * 60
-
-            rotY = self.rotation[1] / 180 * math.pi
-            key = pygame.key.get_pressed()
-            if not key[pygame.K_w]:
-                self.kW = 0
-            if not key[pygame.K_s]:
-                self.kS = 0
-            if not key[pygame.K_a]:
-                self.kA = 0
-            if not key[pygame.K_d]:
-                self.kD = 0
-
-            move_input = 0
-            if self.kW > 0 or key[pygame.K_w]:
-                move_input += 1
-            if self.kS > 0 or key[pygame.K_s]:
-                move_input += 1
-            if self.kA > 0 or key[pygame.K_a]:
-                move_input += 1
-            if self.kD > 0 or key[pygame.K_d]:
-                move_input += 1
-
-            if move_input:
-                self.current_move_speed = min(self.current_move_speed + 0.035 * dt * 60, self.speed)
-            else:
-                self.current_move_speed = max(self.current_move_speed - 0.065 * dt * 60, 0.0)
-
-            if key[pygame.K_LCTRL]:
-                self.acceleration = 0.009 * dt * 60
-            else:
-                self.acceleration = 0
-
-            if self.kW > 0 or key[pygame.K_w]:
-                DX += self.current_move_speed * math.sin(rotY) * dt
-                DZ -= self.current_move_speed * math.cos(rotY) * dt
-                self.setCameraShake(dt)
-                if self.kW > 0:
-                    self.kW -= minKd
-            if self.kS > 0 or key[pygame.K_s]:
-                DX -= self.current_move_speed * math.sin(rotY) * dt
-                DZ += self.current_move_speed * math.cos(rotY) * dt
-                self.setCameraShake(dt)
-                if self.kS > 0:
-                    self.kS -= minKd
-            if self.kA > 0 or key[pygame.K_a]:
-                DX -= self.current_move_speed * math.cos(rotY) * dt
-                DZ -= self.current_move_speed * math.sin(rotY) * dt
-                self.setCameraShake(dt)
-                if self.kA > 0:
-                    self.kA -= minKd
-            if self.kD > 0 or key[pygame.K_d]:
-                DX += self.current_move_speed * math.cos(rotY) * dt
-                DZ += self.current_move_speed * math.sin(rotY) * dt
-                self.setCameraShake(dt)
-                if self.kD > 0:
-                    self.kD -= minKd
-
-            if key[pygame.K_SPACE]:
-                if self.is_spectator:
-                    self.position[1] += 0.08 * dt * 60
-                else:
-                    if key[pygame.K_w]:
-                        self.kW = 2
-                    if key[pygame.K_a]:
-                        self.kA = 2
-                    if key[pygame.K_s]:
-                        self.kS = 2
-                    if key[pygame.K_d]:
-                        self.kD = 2
-                    self.jump()
-
-            sneaking = key[pygame.K_LSHIFT] and not self.is_spectator
-            if key[pygame.K_LSHIFT]:
-                if self.is_spectator:
-                    self.position[1] -= 0.05 * dt * 60
-                else:
-                    self.setShift(True)
-                    self.acceleration = -0.01 * dt * 60
-            else:
-                self.setShift(False)
-                self.acceleration = 0
-
-            if sneaking:
-                DX *= 0.3
-                DZ *= 0.3
-
-            sub_steps = 10
-            sub_dt = dt / sub_steps
-            DX_sub = DX / sub_steps
-            DZ_sub = DZ / sub_steps
-            for _ in range(sub_steps):
-                move_x = DX_sub
-                move_z = DZ_sub
-                sneak_grounded = (sneaking and self.dy <= 0 and
-                                   self._has_support(self.position[0], self.position[1], self.position[2]))
-                if sneak_grounded:
-                    move_x, move_z = self._limit_sneak_movement(move_x, move_z)
-                ground_y = self.position[1]
-                self.move(sub_dt, move_x, 0, move_z)
-                if sneak_grounded and self._has_support(self.position[0], ground_y, self.position[2]):
-                    self.position = (self.position[0], ground_y, self.position[2])
-                    self.dy = 0
-                    self.bInAir = False
-
-        else:
+        if not self.gl.allowEvents["movePlayer"]:
+            self.clear_look()
+            self.is_sprinting = False
+            self._update_fov(dt)
             self.move(dt, 0, 0, 0)
+            return
+
+        self._apply_mouse_look()
+        key = pygame.key.get_pressed()
+        forward = int(key[pygame.K_w]) - int(key[pygame.K_s])
+        strafe = int(key[pygame.K_d]) - int(key[pygame.K_a])
+        input_length = math.hypot(forward, strafe)
+        if input_length:
+            forward /= input_length
+            strafe /= input_length
+
+        sneaking = key[pygame.K_LSHIFT] and not self.is_spectator
+        sprinting = key[pygame.K_LCTRL] and forward > 0 and not sneaking
+        move_speed = self.speed
+        if sprinting:
+            move_speed *= self.SPRINT_MULTIPLIER
+        elif sneaking:
+            move_speed *= self.SNEAK_MULTIPLIER
+
+        rot_y = math.radians(self.rotation[1])
+        dx = (forward * math.sin(rot_y) + strafe * math.cos(rot_y)) * move_speed * dt
+        dz = (-forward * math.cos(rot_y) + strafe * math.sin(rot_y)) * move_speed * dt
+
+        if self.is_spectator:
+            vertical = int(key[pygame.K_SPACE]) - int(key[pygame.K_LSHIFT])
+            self.position = [
+                self.position[0],
+                self.position[1] + vertical * self.speed * dt,
+                self.position[2],
+            ]
+            self.setShift(False, dt)
+        else:
+            self.setShift(sneaking, dt)
+            if key[pygame.K_SPACE]:
+                self.jump()
+
+        start_x = self.position[0]
+        start_z = self.position[2]
+        sub_steps = 1 if self.is_spectator else 10
+        sub_dt = dt / sub_steps
+        step_x = dx / sub_steps
+        step_z = dz / sub_steps
+        for _ in range(sub_steps):
+            move_x = step_x
+            move_z = step_z
+            sneak_grounded = (sneaking and self.dy <= 0 and
+                               self._has_support(self.position[0], self.position[1], self.position[2]))
+            if sneak_grounded:
+                move_x, move_z = self._limit_sneak_movement(move_x, move_z)
+            ground_y = self.position[1]
+            self.move(sub_dt, move_x, 0, move_z)
+            if sneak_grounded and self._has_support(self.position[0], ground_y, self.position[2]):
+                self.position = [self.position[0], ground_y, self.position[2]]
+                self.dy = 0
+                self.bInAir = False
+
+        moved = abs(self.position[0] - start_x) > 1e-6 or abs(self.position[2] - start_z) > 1e-6
+        self.is_sprinting = sprinting and moved
+        if moved and not self.is_spectator:
+            self.setCameraShake(dt)
+            ground = roundPos((self.position[0], self.position[1] - 2, self.position[2]))
+            if ground in self.gl.cubes.cubes and not sneaking:
+                self.gl.blockSound.playStepSound(self.gl.cubes.cubes[ground].name, custom=15)
+        self._update_fov(dt)
+
+    def queue_look(self, dx, dy):
+        self._mouse_dx += dx
+        self._mouse_dy += dy
+
+    def clear_look(self):
+        self._mouse_dx = 0.0
+        self._mouse_dy = 0.0
+
+    def _apply_mouse_look(self):
+        if not self._mouse_dx and not self._mouse_dy:
+            return
+        sensitivity = self.mouse_sensitivity * 0.6 + 0.2
+        scale = sensitivity ** 3 * 8 * 0.15
+        self.look(self._mouse_dx * scale, self._mouse_dy * scale)
+        self.clear_look()
 
     def look(self, dx, dy):
         self.rotation[0] = max(-90, min(90, self.rotation[0] + dy))
         self.rotation[1] += dx
+
+    def _update_fov(self, dt):
+        target_fov = FOV + 10 if self.is_sprinting else FOV
+        blend = 1 - math.exp(-10 * dt)
+        self.gl.fov += (target_fov - self.gl.fov) * blend
+
+    def give_debug_items(self):
+        for block in (
+            "grass", "stone", "log_birch", "cactus", "water",
+            "crafting_table", "debug", "ancient_debris", "tnt", "log_oak",
+        ):
+            self.inventory.addBlock(block)
 
     def _has_support(self, x, y, z):
         support_y = round(y - 1.75)
@@ -223,7 +202,7 @@ class Player:
         return 0, 0
 
     def jump(self):
-        if not self.dy:
+        if self._has_support(self.position[0], self.position[1], self.position[2]):
             self.dy = 5.5
 
     def move(self, dt, dx, dy, dz):
@@ -244,20 +223,6 @@ class Player:
         col = self.collide((x + dx, y + dy, z + dz))
         col2 = roundPos((col[0], col[1] - 2, col[2]))
         self.canShake = self.position[1] == col[1]
-        if self.position[0] != col[0] or self.position[2] != col[2]:
-            if col2 in self.gl.cubes.cubes and self.shift <= 0:
-                self.gl.blockSound.playStepSound(self.gl.cubes.cubes[col2].name, custom=15)
-
-        if self.position[0] != col[0] or self.position[2] != col[2]:
-            if self.gl.fov < FOV + 20:
-                self.gl.fov += 0.2 * dt * 60
-            else:
-                self.gl.fov = FOV + 20
-        else:
-            if self.gl.fov > FOV:
-                self.gl.fov -= 0.2 * dt * 60
-            else:
-                self.gl.fov = FOV
         if not self.bInAir:
             for i in range(1, 6):
                 col21 = roundPos((col[0], col[1] - i, col[2]))
@@ -295,7 +260,7 @@ class Player:
                                           self.gl.cubes.cubes[col2],
                                           direction="down",
                                           count=10)
-        self.position = col
+        self.position = list(col)
 
     def dead(self):
         self.playerDead = True
