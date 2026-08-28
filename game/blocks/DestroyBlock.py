@@ -1,8 +1,41 @@
+import math
 import os
 import pyglet
 from OpenGL.GL import *
 
 class DestroyBlock:
+    BLOCK_HARDNESS = {
+        "grass": 0.6,
+        "dirt": 0.5,
+        "gravel": 0.6,
+        "sand": 0.5,
+        "sandstone": 0.8,
+        "stone": 1.5,
+        "cobblestone": 2.0,
+        "brick": 2.0,
+        "glass": 0.3,
+        "glowstone": 0.3,
+        "iron_block": 5.0,
+        "planks_oak": 2.0,
+        "crafting_table": 2.5,
+        "cactus": 0.4,
+        "sapling": 0.0,
+        "tnt": 0.0,
+        "ancient_debris": 30.0,
+        "bone_block": 2.0,
+        "cow": 0.5,
+        "clouds": 0.2,
+        "nocolor": 1.0,
+        "bedrock": None,
+        "water": None,
+        "lava": None,
+        "debug": None,
+    }
+    TOOL_REQUIRED = {
+        "stone", "cobblestone", "brick", "sandstone", "glowstone",
+        "iron_block", "bone_block", "ancient_debris",
+    }
+
     def __init__(self, gl):
         self.gl = gl
         self.destroyStage = -1
@@ -12,7 +45,7 @@ class DestroyBlock:
 
     def loadTextures(self):
         print("Loading block destroy textures...")
-        for e, i in enumerate(os.listdir("textures/blocks/block_destroy")):
+        for e, i in enumerate(sorted(os.listdir("textures/blocks/block_destroy"))):
             self.textures[e] = \
                 pyglet.graphics.TextureGroup(pyglet.image.load("textures/blocks/block_destroy/" + i)
                                              .get_mipmapped_texture())
@@ -50,32 +83,53 @@ class DestroyBlock:
             self.destroyStage = 0
             self.destroyPos = blockByVec[0]
 
-        if blockName != "bedrock":
-            # Hardness per stage (in seconds per stage, total time = hardness * 10)
-            hardness = {
-                "grass": 0.02,
-                "dirt": 0.02,
-                "gravel": 0.02,
-                "sand": 0.015,
-                "sandstone": 0.015,
-                "leaves_oak": 0.025,
-                "log_oak": 0.025,
-                "stone": 0.115,       # 1.15 seconds with wooden pick
-                "cobblestone": 0.1,   # 1.0 seconds
-            }
-            increment = hardness.get(blockName, 0.1) * dt * 10
-            self.destroyStage += increment
-
-        if self.destroyStage > 9:
+        break_time = self.get_break_time(blockName)
+        if break_time is None:
             self.destroyStage = -1
-            if blockByVec[0] in self.gl.cubes.cubes:
-                print(self.gl.cubes.cubes[blockByVec[0]].name)
-                if str(self.gl.cubes.cubes[blockByVec[0]].name) == "leaves_oak":
-                    self.gl.droppedBlock.addBlock(blockByVec[0], "sapling")
-                else:
-                    self.gl.droppedBlock.addBlock(blockByVec[0], self.gl.cubes.cubes[blockByVec[0]].name)
+            return
 
-            self.gl.blockSound.playBlockSound(self.gl.cubes.cubes[blockByVec[0]].name)
-            self.gl.particles.addParticle(self.gl.cubes.cubes[blockByVec[0]].p, self.gl.cubes.cubes[blockByVec[0]],
-                                          direction="down")
+        if break_time == 0:
+            self.destroyStage = 10
+        else:
+            self.destroyStage += dt * 10 / break_time
+
+        if self.destroyStage >= 10 - 1e-9:
+            self.destroyStage = -1
+            cube = self.gl.cubes.cubes.get(blockByVec[0])
+            if cube is None:
+                return
+            print(cube.name)
+            if cube.name == "leaves_oak":
+                self.gl.droppedBlock.addBlock(blockByVec[0], "sapling")
+            else:
+                self.gl.droppedBlock.addBlock(blockByVec[0], cube.name)
+
+            self.gl.blockSound.playBlockSound(cube.name)
+            self.gl.particles.addParticle(cube.p, cube, direction="down")
             self.gl.cubes.remove(blockByVec[0])
+
+    @classmethod
+    def get_break_time(cls, block_name):
+        if block_name.endswith("_ore"):
+            hardness = 3.0
+            requires_tool = True
+        elif block_name.endswith("_wool"):
+            hardness = 0.8
+            requires_tool = False
+        elif block_name.startswith("log_"):
+            hardness = 2.0
+            requires_tool = False
+        elif block_name.startswith("leaves_"):
+            hardness = 0.2
+            requires_tool = False
+        else:
+            hardness = cls.BLOCK_HARDNESS.get(block_name, 1.0)
+            requires_tool = block_name in cls.TOOL_REQUIRED
+
+        if hardness is None:
+            return None
+        if hardness == 0:
+            return 0
+
+        ticks = math.ceil(hardness * (100 if requires_tool else 30))
+        return max(1, ticks) / 20
