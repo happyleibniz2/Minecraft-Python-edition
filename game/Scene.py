@@ -37,6 +37,7 @@ class Scene:
         self.entity = []
         self.skyColor = [128, 179, 255]
         self.panorama = {}
+        self.water_overlay = None
         self.in_water = False
 
         self.resetScene()
@@ -209,12 +210,15 @@ class Scene:
     def updateScene(self, dt):
         self.genWorld()
 
+        self.cubes.update_fluids(dt)
         self.cubes.rebuild_dirty_chunks(self.player.position)
+        self.in_water = roundPos(self.player.position) in self.cubes.fluids
 
         if self.in_water:
-            glFogfv(GL_FOG_COLOR, (GLfloat * 4)(0, 0, 0, 1))
-            glFogf(GL_FOG_START, 10)
-            glFogf(GL_FOG_END, 35)
+            fog = self.cubes.get_water_color(roundPos(self.player.position), fog=True)
+            glFogfv(GL_FOG_COLOR, (GLfloat * 4)(fog[0] / 255, fog[1] / 255, fog[2] / 255, 1))
+            glFogf(GL_FOG_START, 0)
+            glFogf(GL_FOG_END, 24)
         else:
             glFogfv(GL_FOG_COLOR, (GLfloat * 4)(0.5, 0.7, 1, 1))
             glFogf(GL_FOG_START, 10)
@@ -268,6 +272,7 @@ class Scene:
         for i in self.entity:
             i.render(dt)
 
+        self.cubes.render_water()
         self.particles.drawParticles(dt)
 
         try:
@@ -277,6 +282,30 @@ class Scene:
         self.stuffBatch = pyglet.graphics.Batch()
 
         self.set2d()
+        if self.in_water:
+            self.drawWaterOverlay()
+
+    def drawWaterOverlay(self):
+        texture_group = getattr(self, "water_overlay", None)
+        if texture_group is None:
+            return
+        color = self.cubes.get_water_color(roundPos(self.player.position))
+        glPushAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT | GL_CURRENT_BIT | GL_DEPTH_BUFFER_BIT)
+        try:
+            glEnable(GL_BLEND)
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+            glDepthMask(GL_FALSE)
+            glColor4f(color[0] / 255, color[1] / 255, color[2] / 255, 0.45)
+            texture_group.set_state_recursive()
+            glBegin(GL_QUADS)
+            glTexCoord2f(0, 0); glVertex2f(0, 0)
+            glTexCoord2f(4, 0); glVertex2f(self.WIDTH, 0)
+            glTexCoord2f(4, 3); glVertex2f(self.WIDTH, self.HEIGHT)
+            glTexCoord2f(0, 3); glVertex2f(0, self.HEIGHT)
+            glEnd()
+            texture_group.unset_state_recursive()
+        finally:
+            glPopAttrib()
 
     def spawn_zombie(self):
         """Spawn a zombie near the player (slightly above)."""

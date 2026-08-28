@@ -17,6 +17,7 @@ class Player:
             rotation = [0, 0]
         print("Init Player class...")
         self.is_spectator = False
+        self.in_water = False
         self.position, self.rotation = [x, y, z], rotation
         self.speed = self.WALK_SPEED
         self.gl = gl
@@ -87,6 +88,7 @@ class Player:
 
         self._apply_mouse_look()
         key = pygame.key.get_pressed()
+        self.in_water = self._is_in_water()
         forward = int(key[pygame.K_w]) - int(key[pygame.K_s])
         strafe = int(key[pygame.K_d]) - int(key[pygame.K_a])
         input_length = math.hypot(forward, strafe)
@@ -94,17 +96,23 @@ class Player:
             forward /= input_length
             strafe /= input_length
 
-        sneaking = key[pygame.K_LSHIFT] and not self.is_spectator
+        sneaking = key[pygame.K_LSHIFT] and not self.is_spectator and not self.in_water
         sprinting = key[pygame.K_LCTRL] and forward > 0 and not sneaking
         move_speed = self.speed
         if sprinting:
             move_speed *= self.SPRINT_MULTIPLIER
         elif sneaking:
             move_speed *= self.SNEAK_MULTIPLIER
+        if self.in_water:
+            move_speed *= 0.5
 
         rot_y = math.radians(self.rotation[1])
         dx = (forward * math.sin(rot_y) + strafe * math.cos(rot_y)) * move_speed * dt
         dz = (-forward * math.cos(rot_y) + strafe * math.sin(rot_y)) * move_speed * dt
+        if self.in_water and not self.is_spectator:
+            current_x, current_z = self.gl.cubes.get_water_current(self.position)
+            dx += current_x * 1.39 * dt
+            dz += current_z * 1.39 * dt
 
         if self.is_spectator:
             vertical = int(key[pygame.K_SPACE]) - int(key[pygame.K_LSHIFT])
@@ -116,7 +124,12 @@ class Player:
             self.setShift(False, dt)
         else:
             self.setShift(sneaking, dt)
-            if key[pygame.K_SPACE]:
+            if self.in_water:
+                if key[pygame.K_SPACE]:
+                    self.dy = min(2.4, self.dy + 8 * dt)
+                if key[pygame.K_LSHIFT]:
+                    self.dy = max(-2.4, self.dy - 8 * dt)
+            elif key[pygame.K_SPACE]:
                 self.jump()
 
         start_x = self.position[0]
@@ -141,7 +154,7 @@ class Player:
 
         moved = abs(self.position[0] - start_x) > 1e-6 or abs(self.position[2] - start_z) > 1e-6
         self.is_sprinting = sprinting and moved
-        if moved and not self.is_spectator:
+        if moved and not self.is_spectator and not self.in_water:
             self.setCameraShake(dt)
             ground = roundPos((self.position[0], self.position[1] - 2, self.position[2]))
             if ground in self.gl.cubes.cubes and not sneaking:
@@ -175,7 +188,7 @@ class Player:
 
     def give_debug_items(self):
         for block in (
-            "grass", "stone", "log_birch", "cactus", "water",
+            "grass", "stone", "log_birch", "cactus", "water_bucket",
             "crafting_table", "debug", "ancient_debris", "tnt", "log_oak",
         ):
             self.inventory.addBlock(block)
@@ -190,6 +203,11 @@ class Player:
                 if roundPos((x + offset_x, support_y, z + offset_z)) in self.gl.cubes.collidable:
                     return True
         return False
+
+    def _is_in_water(self):
+        x, y, z = self.position
+        return (roundPos((x, y, z)) in self.gl.cubes.fluids or
+                roundPos((x, y - 1, z)) in self.gl.cubes.fluids)
 
     def _limit_sneak_movement(self, dx, dz):
         x, y, z = self.position
@@ -208,8 +226,12 @@ class Player:
     def move(self, dt, dx, dy, dz):
         if self.is_spectator:
             dt = 0
-        self.dy -= dt * self.gravity
-        self.dy = max(self.dy, -self.tVel)
+        if self.in_water:
+            self.dy = max(-3, min(3, self.dy - dt * self.gravity * 0.2))
+            self.dy *= 0.8 ** (dt * 20)
+        else:
+            self.dy -= dt * self.gravity
+            self.dy = max(self.dy, -self.tVel)
         dy += self.dy * dt
 
         if self.dy > 19.8:
@@ -223,6 +245,12 @@ class Player:
         col = self.collide((x + dx, y + dy, z + dz))
         col2 = roundPos((col[0], col[1] - 2, col[2]))
         self.canShake = self.position[1] == col[1]
+        if self.in_water:
+            self.bInAir = False
+            self.playerFallY = 0
+            self.lastPlayerPosOnGround = list(col)
+            self.position = list(col)
+            return
         if not self.bInAir:
             for i in range(1, 6):
                 col21 = roundPos((col[0], col[1] - i, col[2]))
@@ -304,11 +332,19 @@ class Player:
                     if canOpenBlock(self, self.gl.cubes.cubes[blockByVec[1]], self.gl):
                         openBlockInventory(self, self.gl.cubes.cubes[blockByVec[1]], self.gl)
                         return
+            selected = self.inventory.inventory[self.inventory.activeInventory]
+            if selected[0] == "water_bucket" and selected[1] and blockByVec[1]:
+                water_pos = tuple(blockByVec[1])
+                player_pos = tuple(roundPos((self.position[0], self.position[1] - 1, self.position[2])))
+                player_head = tuple(roundPos(self.position))
+                if water_pos not in (player_pos, player_head):
+                    self.gl.cubes.place_water_source(water_pos)
+                return
             if blockByVec[1]:
                 playerPos = tuple(roundPos((self.position[0], self.position[1] - 1, self.position[2])))
                 playerPos2 = tuple(roundPos((self.position[0], self.position[1], self.position[2])))
                 blockByVec = blockByVec[1][0], blockByVec[1][1], blockByVec[1][2]
-                if self.inventory.inventory[self.inventory.activeInventory][0] and \
+                if self.inventory.inventory[self.inventory.activeInventory][0] in self.gl.block and \
                         self.inventory.inventory[self.inventory.activeInventory][1] and blockByVec != playerPos and \
                         blockByVec != playerPos2:
                     self.gl.cubes.add(blockByVec, self.inventory.inventory[self.inventory.activeInventory][0], now=True)

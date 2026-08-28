@@ -19,7 +19,9 @@ def load_textures(self):
             if os.path.isdir(d + '/' + file):
                 dirs += [d + '/' + file]
             else:
-                if ".png" not in file:
+                if not file.lower().endswith(".png"):
+                    continue
+                if d == "textures" and file in ("water_still.png", "water_flow.png"):
                     continue
 
                 image = pyglet.image.load(d + '/' + file)
@@ -29,6 +31,8 @@ def load_textures(self):
                 elif image.width == 8 and image.height == 8 or image.width == 16 and image.height == 16 or image.width == 32 and image.height == 32 or image.width == 64 and image.height == 64:
                     # Continue with the existing method for other resolutions
                     texture = image.get_mipmapped_texture()
+                else:
+                    texture = image.get_texture()
 
                 n = file.split('.')[0]
                 self.texture_dir[n] = d
@@ -53,9 +57,14 @@ def load_textures(self):
             elif d == 'textures/blocks/ts':
                 self.inventory_textures[n] = pyglet.resource.image(f"{d}/{n} s.png")
                 self.block[n] = t[n + ' s'], t[n + ' s'], t[n + ' t'], t[n + ' t'], t[n + ' s'], t[n + ' s']
-            if n in self.inventory_textures:
-                self.inventory_textures[n].width = 22
-                self.inventory_textures[n].height = 22
+        elif d == 'textures/items':
+            self.inventory_textures[n] = pyglet.image.load(f"{d}/{n}.png")
+        if n in self.inventory_textures:
+            self.inventory_textures[n].width = 22
+            self.inventory_textures[n].height = 22
+
+    from game.blocks.Water import configure_water_textures
+    configure_water_textures(self)
 
 
 def translateSeed(seed):
