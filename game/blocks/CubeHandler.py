@@ -408,6 +408,26 @@ class CubeHandler:
         rgb = tuple(component * shade for component in multiplier)
         return 'c3f', rgb * 4
 
+    def get_grass_overlay(self, cube, face_index, shade):
+        """Tinted side overlay for the 1.20.1 grass block, or ``None``."""
+        if cube.name != "grass" or face_index in (2, 3):
+            return None
+
+        overlay = getattr(self.gl, "grass_side_overlay", None)
+        if overlay is None:
+            return None
+
+        x, _, z = cube.p
+        key = ("grass_overlay", x, z)
+        multiplier = self.block_tint_cache.get(key)
+        if multiplier is None:
+            biome = self._get_biome(x, z).biome
+            multiplier = self.biome_colors.grass_overlay_multiplier(biome)
+            self.block_tint_cache[key] = multiplier
+
+        rgb = tuple(component * shade for component in multiplier)
+        return overlay, ('c3f', rgb * 4)
+
     def get_water_face_color(self, p, face_index):
         shade = 1.0 if face_index == 3 else 0.5 if face_index == 2 else 0.8 if face_index in (0, 4) else 0.6
         color = self.get_water_color(p)
@@ -531,6 +551,18 @@ class CubeHandler:
 
         for _, chunk in visible:
             chunk.render_opaque()
+
+        # tinted grass side overlays: alpha cut-outs sitting on the dirt sides
+        glPushAttrib(GL_ENABLE_BIT | GL_DEPTH_BUFFER_BIT)
+        try:
+            glEnable(GL_BLEND)
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+            glEnable(GL_POLYGON_OFFSET_FILL)
+            glPolygonOffset(-1.0, -1.0)
+            for _, chunk in visible:
+                chunk.render_overlay()
+        finally:
+            glPopAttrib()
 
         self.visible_water_chunks = sorted(visible, key=lambda item: item[0], reverse=True)
 

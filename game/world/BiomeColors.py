@@ -37,6 +37,11 @@ DEFAULT_FOLIAGE = (119, 171, 47)
 GRASS_TINTED_BLOCKS = ("grass", "tall_grass")
 FOLIAGE_TINTED_BLOCKS = ("leaves_oak", "leaves_taiga", "sapling")
 
+# Grayscale (vanilla 1.20.1) art takes the raw colormap colour, exactly like
+# Minecraft. Textures that already have green baked in are normalised against a
+# reference biome instead, so they shift hue without being double-darkened.
+GRAYSCALE_BLOCKS = {"grass"}
+
 
 def _clamp01(value):
     return max(0.0, min(1.0, value))
@@ -140,13 +145,24 @@ class BiomeColorProvider:
     def foliage_multiplier(self, biome):
         return self._multiplier(self.foliage_color(biome), self._foliage_reference)
 
+    def _direct(self, color):
+        return tuple(channel / 255.0 for channel in color)
+
     def block_multiplier(self, block_name, biome):
         """Tint multiplier for a block, or ``None`` when it is not tinted."""
         if block_name in GRASS_TINTED_BLOCKS:
+            if block_name in GRAYSCALE_BLOCKS:
+                return self._direct(self.grass_color(biome))
             return self.grass_multiplier(biome)
         if block_name in FOLIAGE_TINTED_BLOCKS:
+            if block_name in GRAYSCALE_BLOCKS:
+                return self._direct(self.foliage_color(biome))
             return self.foliage_multiplier(biome)
         return None
+
+    def grass_overlay_multiplier(self, biome):
+        """Tint for the grayscale side overlay: always the raw biome colour."""
+        return self._direct(self.grass_color(biome))
 
 
 def is_tinted(block_name):

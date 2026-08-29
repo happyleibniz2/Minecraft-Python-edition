@@ -16,6 +16,7 @@ class RenderChunk:
         self.cubes = {}          # world pos -> Cube
         self.batch = pyglet.graphics.Batch()
         self.water_batch = pyglet.graphics.Batch()
+        self.overlay_batch = pyglet.graphics.Batch()
         self.dirty = True
         self.vertex_count = 0
 
@@ -32,6 +33,7 @@ class RenderChunk:
         """Rebuild chunk batch from cubes."""
         self.batch = pyglet.graphics.Batch()
         self.water_batch = pyglet.graphics.Batch()
+        self.overlay_batch = pyglet.graphics.Batch()
         global_cubes = self.gl.cubes.cubes
         handler = self.gl.cubes  # to get color constants
 
@@ -84,9 +86,25 @@ class RenderChunk:
                   ('t2f', (0,0, 1,0, 1,1, 0,1)),
                   clr)
 
+        if cube.name == "water":
+            return
+
+        # 1.20.1 grass draws a tinted grayscale overlay on top of the dirt side
+        overlay = handler.get_grass_overlay(cube, face_index, shade)
+        if overlay is not None:
+            overlay_group, overlay_color = overlay
+            self.overlay_batch.add(4, GL_QUADS, overlay_group,
+                                   ('v3f', face_vertices),
+                                   ('t2f', (0,0, 1,0, 1,1, 0,1)),
+                                   overlay_color)
+
     def render_opaque(self):
         if not self.dirty:
             self.batch.draw()
+
+    def render_overlay(self):
+        if not self.dirty:
+            self.overlay_batch.draw()
 
     def render_water(self):
         if not self.dirty:

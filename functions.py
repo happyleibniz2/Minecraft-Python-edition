@@ -70,6 +70,34 @@ def load_textures(self):
 
     from game.blocks.Water import configure_water_textures
     configure_water_textures(self)
+    configure_grass_textures(self)
+
+
+def configure_grass_textures(self):
+    """Wire up the Minecraft 1.20.1 three-texture grass block.
+
+    ``grass_block_top`` is grayscale and biome-tinted, ``grass_block_side`` is
+    plain dirt, and ``grass_block_side_overlay`` is a grayscale cut-out drawn
+    over the sides and tinted with the same biome colour.
+    """
+    required = ("grass_block_top", "grass_block_side", "grass_block_side_overlay")
+    if not all(name in self.texture for name in required):
+        return
+
+    top = self.texture["grass_block_top"]
+    side = self.texture["grass_block_side"]
+    bottom = self.texture.get("dirt", side)
+
+    # order: left, right, bottom, top, back, front
+    self.block["grass"] = (side, side, bottom, top, side, side)
+    self.grass_side_overlay = self.texture["grass_block_side_overlay"]
+
+    path = os.path.join("textures", "blocks", "grass", "grass_block_side.png")
+    if os.path.isfile(path):
+        image = pyglet.image.load(path)
+        image.width = 22
+        image.height = 22
+        self.inventory_textures["grass"] = image
 
 
 def translateSeed(seed):
