@@ -6,10 +6,22 @@ from pyglet.gl import GL_QUADS
 import pygame
 from game.GUI.ModalWindow import ModalWindow
 from game.crafting import getCraftingItem
+from game.SlotMechanics import (
+    MAX_STACK,
+    insert_stack,
+    is_empty,
+    left_click,
+    right_click,
+)
 from settings import *
 
 
 class Inventory:
+    HOTBAR_SLOTS = range(0, 9)
+    STORAGE_SLOTS = range(9, 36)
+    GRID_SLOTS = range(37, 41)
+    RESULT_SLOT = 41
+
     def __init__(self, glClass):
         self.gl = glClass
         self.inventory = {}
@@ -17,30 +29,49 @@ class Inventory:
         self.activeInventory = 0
         self.heartAnimation = []
         self.draggingItem = []
+        self.window = None
 
-        ls = list(self.gl.inventory_textures.items())
         old = False
         for i in range(10):
             old = not old
             self.heartAnimation.append([0, '-' if old else '+', randint(3, 8) / 10])
-        for i in range(9 * 5 + 1):
-            self.inventory[i] = ["sand", 0]
+        for i in range(42):
+            self.inventory[i] = ["", 0]
             self.blocksLabel[i] = pyglet.text.Label("0",
                                                     font_name='Minecraft Rus',
                                                     color=(255, 255, 255, 255),
                                                     font_size=10,
                                                     x=self.gl.WIDTH // 2, y=60)
+
+    @property
+    def insert_order(self):
+        """Minecraft fills the hotbar first, then main storage."""
+        return list(self.HOTBAR_SLOTS) + list(self.STORAGE_SLOTS)
+
     def clearCraftingSlots(self):
-        for slot in range(37,42):
+        """Return grid contents to the inventory, then clear the grid."""
+        for slot in self.GRID_SLOTS:
+            stack = self.inventory.get(slot, ["", 0])
+            if not is_empty(stack):
+                self.giveItem(stack[0], stack[1])
             self.inventory[slot] = ["", 0]
+        self.inventory[self.RESULT_SLOT] = ["", 0]
+
+        if not is_empty(self.draggingItem):
+            self.giveItem(self.draggingItem[0], self.draggingItem[1])
+        self.draggingItem = []
 
     def consumeCraftingIngredients(self):
-        for slot in range(37, 41):
-            if self.inventory[slot][1] > 0:
-                self.inventory[slot][1] -= 1
-                if self.inventory[slot][1] <= 0:
-                    self.inventory[slot] = ["", 0]
-        self.inventory[41] = ["", 0]
+        for slot in self.GRID_SLOTS:
+            stack = self.inventory.get(slot, ["", 0])
+            if stack[1] > 0:
+                remaining = stack[1] - 1
+                self.inventory[slot] = [stack[0], remaining] if remaining > 0 else ["", 0]
+        self.inventory[self.RESULT_SLOT] = ["", 0]
+
+    def giveItem(self, name, count=1):
+        """Insert items using Minecraft's merge-then-fill order."""
+        return insert_stack(self.inventory, self.insert_order, name, count, MAX_STACK)
 
     def get_inventory_blocks(self):
         return self.inventory
@@ -49,10 +80,11 @@ class Inventory:
         self.window = ModalWindow(self.gl)
         self.window.setWindow(self.gl.gui.GUI_TEXTURES["inventory_window"])
         self.window.clickEvent = self.windowClickEvent
+        self.window.closeEvent = self.clearCraftingSlots
         self.window.updateFunctions.append(self.updateWindow)
 
         x = 16
-        for i in range(9):
+        for i in self.HOTBAR_SLOTS:
             self.window.cellPositions[i] = [(x, 284), None]
             x += 36
 
@@ -66,12 +98,11 @@ class Inventory:
         x += 36
         self.window.cellPositions[40] = [(x, y), None]
 
-        self.window.cellPositions[41] = [(308, 56), None]  # TODO: crafting table in inventory  # DONE
+        self.window.cellPositions[self.RESULT_SLOT] = [(308, 56), None]
 
         x, y = 16, 168
-        for i in range(9 * 3, 0, -1):
-            self.window.cellPositions[9 + i] = [(x, y), None]
-
+        for slot in self.STORAGE_SLOTS:
+            self.window.cellPositions[slot] = [(x, y), None]
             x += 36
             if x > 304:
                 x = 16
@@ -81,54 +112,54 @@ class Inventory:
         self.window.show()
 
     def windowClickEvent(self, button, cell):
+        if cell not in self.inventory:
+            return
+
+        if cell == self.RESULT_SLOT:
+            self.takeCraftingResult(button)
+            return
+
         if button[0]:
-            if cell == 41 and self.inventory.get(41, ["", 0])[0]:
-                if not self.draggingItem:
-                    self.draggingItem = [self.inventory[41][0], self.inventory[41][1]]
-                    self.consumeCraftingIngredients()
-                return
+            slot, held = left_click(self.inventory[cell], self.draggingItem)
+            self.inventory[cell] = slot
+            self.draggingItem = held
+        elif button[2]:
+            slot, held = right_click(self.inventory[cell], self.draggingItem)
+            self.inventory[cell] = slot
+            self.draggingItem = held
 
-            if self.draggingItem:
-                if self.inventory[cell][1] == 0:
-                    self.inventory[cell] = self.draggingItem
-                    self.draggingItem = []
-                else:
-                    safe = [self.inventory[cell][0], self.inventory[cell][1]]
-                    self.inventory[cell] = self.draggingItem
-                    self.draggingItem = safe
-            else:
-                if self.inventory[cell][1] != 0:
-                    self.draggingItem = [self.inventory[cell][0], self.inventory[cell][1]]
-                    self.inventory[cell][1] = 0
-        if button[2]:
-            if self.draggingItem:
-                if self.inventory[cell][0] == self.draggingItem[0] and self.draggingItem[1]:
-                    self.inventory[cell][1] += 1
-                    self.draggingItem[1] -= 1
-                elif self.inventory[cell][1] == 0 and self.draggingItem[1]:
-                    self.inventory[cell][0] = self.draggingItem[0]
-                    self.inventory[cell][1] += 1
-                    self.draggingItem[1] -= 1
+    def takeCraftingResult(self, button):
+        """Craft one batch, merging into the held stack like Minecraft."""
+        result = self.inventory.get(self.RESULT_SLOT, ["", 0])
+        if is_empty(result):
+            return
 
-    def updateWindow(self, win, mousePos):
-        crafting_slots = [
-            self.inventory[37][0] if self.inventory[37][1] else "",
-            self.inventory[38][0] if self.inventory[38][1] else "",
-            self.inventory[39][0] if self.inventory[39][1] else "",
-            self.inventory[40][0] if self.inventory[40][1] else "",
-        ]
-        crafting_counts = [
-            self.inventory[37][1] if self.inventory[37][1] else 0,
-            self.inventory[38][1] if self.inventory[38][1] else 0,
-            self.inventory[39][1] if self.inventory[39][1] else 0,
-            self.inventory[40][1] if self.inventory[40][1] else 0,
-        ]
+        if is_empty(self.draggingItem):
+            self.draggingItem = [result[0], result[1]]
+            self.consumeCraftingIngredients()
+            return
+
+        if self.draggingItem[0] != result[0]:
+            return
+        if self.draggingItem[1] + result[1] > MAX_STACK:
+            return
+
+        self.draggingItem = [self.draggingItem[0], self.draggingItem[1] + result[1]]
+        self.consumeCraftingIngredients()
+
+    def refreshCraftingResult(self):
+        crafting_slots = [self.inventory[slot][0] if self.inventory[slot][1] else ""
+                          for slot in self.GRID_SLOTS]
+        crafting_counts = [self.inventory[slot][1] for slot in self.GRID_SLOTS]
         craftResult = getCraftingItem(crafting_slots, numbers=crafting_counts)
 
         if craftResult and craftResult[0]:
-            self.inventory[41] = craftResult
+            self.inventory[self.RESULT_SLOT] = craftResult
         else:
-            self.inventory[41] = ["", 0]
+            self.inventory[self.RESULT_SLOT] = ["", 0]
+
+    def updateWindow(self, win, mousePos):
+        self.refreshCraftingResult()
 
         for i in self.window.cellPositions.items():
             xx, yy = self.window.cellPositions[i[0]][0][0], self.window.cellPositions[i[0]][0][1]
@@ -168,25 +199,26 @@ class Inventory:
                                         x=lx, y=ly)
                 lbl.draw()
 
-    def addBlock(self, name):
-        ext = False
-        extech = -1
-        sech = -1
-        for item in self.inventory.items():
-            i = item[1]
-            if i[1] == 0 and sech == -1:
-                sech = item[0]
-            elif i[1] != 0:
-                if i[0] == name and i[1] + 1 <= 64:
-                    ext = True
-                    extech = item[0]
-                    break
-        if ext:
-            self.inventory[extech][1] += 1
-        else:
-            if self.inventory[self.activeInventory][1] == 0:
-                sech = self.activeInventory
-            self.inventory[sech] = [name, 1]
+    def addBlock(self, name, count=1):
+        """Pick up items: top up the selected slot and matching stacks first."""
+        if not name or count <= 0:
+            return 0
+
+        selected = self.inventory.get(self.activeInventory, ["", 0])
+        if not is_empty(selected) and selected[0] == name and selected[1] < MAX_STACK:
+            moved = min(MAX_STACK - selected[1], count)
+            self.inventory[self.activeInventory] = [name, selected[1] + moved]
+            count -= moved
+            if count <= 0:
+                return 0
+        elif is_empty(selected):
+            moved = min(MAX_STACK, count)
+            self.inventory[self.activeInventory] = [name, moved]
+            count -= moved
+            if count <= 0:
+                return 0
+
+        return self.giveItem(name, count)
 
     def draw(self):
         inventory = self.gl.gui.GUI_TEXTURES["inventory"]

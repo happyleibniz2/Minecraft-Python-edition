@@ -678,6 +678,10 @@ while True:
                             player.cameraType = 1
                     if event.key == pygame.K_z:
                         scene.spawn_zombie()
+                    if event.key == pygame.K_c:
+                        scene.spawn_cow()
+                    if event.key == pygame.K_v:
+                        scene.spawn_sheep()
                     if event.key == pygame.K_p:
                         player.is_spectator = not player.is_spectator
                     if event.key == pygame.K_l:

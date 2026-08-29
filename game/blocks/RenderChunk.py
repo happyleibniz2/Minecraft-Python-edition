@@ -60,14 +60,23 @@ class RenderChunk:
 
         if cube.name == "water":
             clr = handler.get_water_face_color(cube.p, face_index)
-        elif face_index == 3:   # top
-            clr = handler.top_color
-        elif face_index == 2: # bottom
-            clr = handler.bottom_color
-        elif face_index in (0, 4):  # left or back
-            clr = handler.ns_color
-        else:  # right or front
-            clr = handler.ew_color
+        else:
+            if face_index == 3:   # top
+                clr = handler.top_color
+                shade = 1.0
+            elif face_index == 2: # bottom
+                clr = handler.bottom_color
+                shade = 0.5
+            elif face_index in (0, 4):  # left or back
+                clr = handler.ns_color
+                shade = 0.8
+            else:  # right or front
+                clr = handler.ew_color
+                shade = 0.6
+
+            tinted = handler.get_block_face_color(cube, face_index, shade)
+            if tinted is not None:
+                clr = tinted
 
         batch = self.water_batch if cube.name == "water" else self.batch
         batch.add(4, GL_QUADS, tex_group,

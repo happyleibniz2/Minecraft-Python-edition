@@ -14,6 +14,8 @@ class ModalWindow:
         self.clickWait = 1
         self.windowId = 0
         self.window = None
+        self.closeEvent = None
+        self.visible = False
 
     def setWindow(self, win):
         self.window = win
@@ -24,7 +26,12 @@ class ModalWindow:
         self.gl.allowEvents["movePlayer"] = True
         self.gl.allowEvents["showCrosshair"] = True
 
-        self.gl.updateEvents.pop(self.windowId)
+        if self.drawWindow in self.gl.updateEvents:
+            self.gl.updateEvents.remove(self.drawWindow)
+        self.visible = False
+
+        if self.closeEvent:
+            self.closeEvent()
 
     def drawWindow(self):
         self.clickWait += 1
@@ -70,5 +77,8 @@ class ModalWindow:
             return
 
     def show(self):
+        if self.visible:
+            return
         self.gl.updateEvents.append(self.drawWindow)
         self.windowId = len(self.gl.updateEvents) - 1
+        self.visible = True

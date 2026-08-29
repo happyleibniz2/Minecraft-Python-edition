@@ -12,8 +12,13 @@ def load_textures(self):
     print("Loading textures...")
     t = self.texture
     dirs = ['textures']
+    # colormaps are sampled on the CPU and share names with real blocks
+    # (grass.png), so they must never enter the block texture tables
+    excluded_dirs = {'textures/colormap'}
     while dirs:
         d = dirs.pop(0)
+        if d.replace('\\', '/') in excluded_dirs:
+            continue
         textures = os.listdir(d)
         for file in textures:
             if os.path.isdir(d + '/' + file):

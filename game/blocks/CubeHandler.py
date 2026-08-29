@@ -7,6 +7,7 @@ from game.blocks.RenderChunk import RenderChunk
 from game.blocks.Water import FluidState, water_face_vertices
 from game.Frustum import Frustum
 from game.world.Biomes import Biomes, getBiomeByTemp
+from game.world.BiomeColors import BiomeColorProvider, is_tinted
 import settings  # for DISTANCE_CULLING and CHUNK_RENDER_DISTANCE
 
 
@@ -30,6 +31,8 @@ class CubeHandler:
         self.water_tint_cache = {}
         self.biome_cache = {}
         self.visible_water_chunks = []
+        self.biome_colors = BiomeColorProvider()
+        self.block_tint_cache = {}
 
         # Render chunks
         self.render_chunks = {}
@@ -377,6 +380,33 @@ class CubeHandler:
             temperature = self.gl.worldGen.perlinBiomes(x, z) * 3
             self.biome_cache[key] = Biomes(getBiomeByTemp(temperature))
         return self.biome_cache[key]
+
+    # Minecraft tints only the grass top face; sides and bottom keep dirt tones.
+    TINTED_FACES = {
+        "grass": (3,),
+    }
+
+    def get_block_face_color(self, cube, face_index, shade):
+        """Biome-tinted vertex colour for a face, or ``None`` when untinted."""
+        if not is_tinted(cube.name):
+            return None
+
+        tinted_faces = self.TINTED_FACES.get(cube.name)
+        if tinted_faces is not None and face_index not in tinted_faces:
+            return None
+
+        x, _, z = cube.p
+        key = (cube.name, x, z)
+        multiplier = self.block_tint_cache.get(key)
+        if multiplier is None:
+            biome = self._get_biome(x, z).biome
+            multiplier = self.biome_colors.block_multiplier(cube.name, biome)
+            if multiplier is None:
+                return None
+            self.block_tint_cache[key] = multiplier
+
+        rgb = tuple(component * shade for component in multiplier)
+        return 'c3f', rgb * 4
 
     def get_water_face_color(self, p, face_index):
         shade = 1.0 if face_index == 3 else 0.5 if face_index == 2 else 0.8 if face_index in (0, 4) else 0.6

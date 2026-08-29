@@ -293,12 +293,18 @@ class Player:
     def dead(self):
         self.playerDead = True
         self.gl.deathScreen()
-        for i in self.inventory.inventory.items():
-            for j in range(i[1][1]):
+        # only real storage drops; the crafting grid is returned separately
+        droppable = list(self.inventory.HOTBAR_SLOTS) + list(self.inventory.STORAGE_SLOTS)
+        for slot in droppable:
+            name, count = self.inventory.inventory.get(slot, ["", 0])
+            for _ in range(count):
+                if not name:
+                    continue
                 self.gl.droppedBlock.addBlock((
                     self.position[0] + randint(-2, 2), self.position[1], self.position[2] + randint(-2, 2)
-                ), i[1][0])
-            self.inventory.inventory[i[0]] = [i[1][0], 0]
+                ), name)
+            self.inventory.inventory[slot] = ["", 0]
+        self.inventory.clearCraftingSlots()
 
     def mouseEvent(self, button, dt):
         blockByVec = self.gl.cubes.hitTest(self.position, self.get_sight_vector())
@@ -309,18 +315,18 @@ class Player:
             self.gl.destroy.destroyStage = -1
 
         if button == 2 and blockByVec[0]:
+            # "pick block": swap a matching stack into the selected hotbar slot
             if self.inventory.inventory[self.inventory.activeInventory][1] == 0:
-                itm = -1
-                for item in self.inventory.inventory.items():
-                    i = item[1]
-                    if i[0] == self.gl.cubes.cubes[blockByVec[0]].name and i[1] != 0:
-                        itm = item[0]
+                target = self.gl.cubes.cubes[blockByVec[0]].name
+                searchable = (list(self.inventory.HOTBAR_SLOTS) +
+                              list(self.inventory.STORAGE_SLOTS))
+                for slot in searchable:
+                    stack = self.inventory.inventory.get(slot, ["", 0])
+                    if stack[0] == target and stack[1] != 0:
+                        self.inventory.inventory[self.inventory.activeInventory] = [stack[0], stack[1]]
+                        self.inventory.inventory[slot] = ["", 0]
+                        self.gl.gui.showText(target)
                         break
-                if itm != -1:
-                    self.inventory.inventory[self.inventory.activeInventory] = [
-                        self.inventory.inventory[itm][0], self.inventory.inventory[itm][1]]
-                    self.inventory.inventory[itm][1] = 0
-                    self.gl.gui.showText(self.inventory.inventory[itm][0])
         if button == 3:
             if blockByVec[0] and self.shift <= 0:
                 if blockByVec[0] in self.gl.cubes.cubes:

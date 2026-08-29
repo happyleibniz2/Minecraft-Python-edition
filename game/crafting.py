@@ -1,19 +1,52 @@
+"""Minecraft-style recipe matching.
+
+A recipe result is independent of how large the ingredient stacks are: putting
+64 logs into the grid still yields one craft (4 planks), exactly like Minecraft.
+"""
+
+# Shapeless recipes: (sorted ingredient tuple) -> (result name, result count)
+SHAPELESS_RECIPES = {
+    ("log_oak",): ("planks_oak", 4),
+    ("log_birch",): ("planks_oak", 4),
+    ("log_acacia",): ("planks_oak", 4),
+    ("planks_oak",) * 4: ("crafting_table", 1),
+}
+
+
+def _ingredient_key(objects, numbers):
+    ingredients = []
+    for index, name in enumerate(objects):
+        count = 0
+        if index < len(numbers):
+            try:
+                count = int(numbers[index])
+            except (TypeError, ValueError):
+                count = 0
+        if name and count > 0:
+            ingredients.append(str(name))
+    return tuple(sorted(ingredients))
+
+
 def getCraftingItem(objects, tableType=False, numbers=None):
+    """Return ``[name, count]`` for the recipe formed by ``objects``.
+
+    ``objects`` is a flat list of slot contents and ``numbers`` the matching
+    stack sizes. Matching is shapeless, so ingredient placement inside the grid
+    does not matter.
+    """
+    if not isinstance(objects, (list, tuple)):
+        return ["", 0]
+
     if numbers is None:
-        numbers = [1, 1, 1, 1]
+        numbers = [1] * len(objects)
 
-    if not isinstance(objects, (list, tuple)) or len(objects) != 4:
+    key = _ingredient_key(objects, numbers)
+    if not key:
         return ["", 0]
 
-    if tableType:
+    recipe = SHAPELESS_RECIPES.get(key)
+    if recipe is None:
         return ["", 0]
 
-    slots = [str(slot) for slot in objects]
-    counts = [int(n) if str(n).isdigit() else 1 for n in numbers[:4]]
-
-    if objects == ["log_oak", "", "", ""]:
-        return ["planks_oak", counts[0] or 1]
-    if objects == ["planks_oak", "planks_oak", "planks_oak", "planks_oak"]:
-        return ["crafting_table", counts[0] or 1]
-
-    return ["", 0]
+    name, count = recipe
+    return [name, count]

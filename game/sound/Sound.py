@@ -36,14 +36,25 @@ class Sound:
                     continue
                 self.musicPlayer.queue(self.MENU_MUSIC[i])
 
+    @staticmethod
+    def _play(sound, volume):
+        """Play a sound, tolerating pygame returning no free channel."""
+        if sound is None:
+            return None
+        channel = sound.play()
+        if channel is not None:
+            channel.set_volume(volume)
+        return channel
+
     def playSound(self, name, volume):
-        channel = self.SOUNDS[name].play()
-        channel.set_volume(volume)
+        return self._play(self.SOUNDS.get(name), volume)
 
     def playGuiSound(self, st):
         if st == "click":
-            channel = self.SOUNDS["GUI"]["click_stereo"][0].play()
-            channel.set_volume(self.volume)
+            sounds = self.SOUNDS.get("GUI", {}).get("click_stereo")
+            if sounds:
+                return self._play(sounds[0], self.volume)
+        return None
 
     def playMusic(self):
         if self.music_already_playing:

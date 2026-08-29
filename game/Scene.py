@@ -307,6 +307,34 @@ class Scene:
         finally:
             glPopAttrib()
 
+    def spawn_entity(self, factory, label):
+        """Spawn an entity near the player, like Minecraft's spawn eggs."""
+        import random
+
+        if self.player is None:
+            print("No player to spawn near.")
+            return None
+
+        px, py, pz = self.player.position
+        dx = random.randint(-4, 4)
+        dz = random.randint(-4, 4)
+        spawn_pos = [px + dx, py + 2, pz + dz]
+
+        entity = factory(self)
+        entity.position = spawn_pos
+        entity.rotation[1] = random.randint(0, 360)
+        self.entity.append(entity)
+        print(f"{label} spawned at {spawn_pos}")
+        return entity
+
+    def spawn_cow(self):
+        from game.entity.Cow import Cow
+        return self.spawn_entity(Cow, "Cow")
+
+    def spawn_sheep(self):
+        from game.entity.Sheep import Sheep
+        return self.spawn_entity(Sheep, "Sheep")
+
     def spawn_zombie(self):
         """Spawn a zombie near the player (slightly above)."""
         import random
