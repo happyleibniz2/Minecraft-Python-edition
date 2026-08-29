@@ -11,9 +11,15 @@
 
 - zombie mob
 
+- cow mob
+
+- sheep mob
+
 - simple zombie ai
 
 - Better water texture
+
+- Better grass texture
 
 - Water physics (sort of)
 
@@ -29,10 +35,12 @@
 ## 📸In game screenshots
 <img width="1274" height="754" alt="屏幕截图 2026-08-26 075310" src="https://github.com/user-attachments/assets/161883b2-27c2-4fb7-a7f4-bc6a62de4260" />
 <img width="1271" height="760" alt="屏幕截图 2026-08-26 075317" src="https://github.com/user-attachments/assets/78d54698-4012-43ab-be1e-e27055eb6f0d" />
-<img width="1257" height="752" alt="屏幕截图 2026-08-27 062459" src="https://github.com/user-attachments/assets/237020b5-7b7e-4a5f-8157-1ecd7b7d8a91" />
-<img width="1257" height="752" alt="屏幕截图 2026-08-27 062442" src="https://github.com/user-attachments/assets/a81cc5ba-d7df-4117-a164-b0f98d9fd8d3" />
-(the zombie is shy)
-<img width="1276" height="746" alt="image" src="https://github.com/user-attachments/assets/0c12cbcd-270c-4317-b0ed-4a1181dedb06" />
+<img width="1265" height="754" alt="屏幕截图 2026-08-28 233745" src="https://github.com/user-attachments/assets/fa05e708-d431-4c6c-b606-9b2d4af8ae3f" />
+<img width="1264" height="751" alt="屏幕截图 2026-08-28 233627" src="https://github.com/user-attachments/assets/c4d50b3d-7c31-411c-95c0-48b45c18db4b" />
+<img width="1268" height="743" alt="屏幕截图 2026-08-28 233757" src="https://github.com/user-attachments/assets/8c5ce4cb-9ace-45b5-8353-0079556be80f" />
+<img width="1265" height="744" alt="屏幕截图 2026-08-28 233722" src="https://github.com/user-attachments/assets/a47b5cc4-0488-43b0-ab16-b7b0f77ef92c" />
+<img width="1278" height="748" alt="屏幕截图 2026-08-28 233641" src="https://github.com/user-attachments/assets/26b4244f-e480-4553-bca3-ba6ad8ee2968" />
+
 
 
 ## ⚙️ Technical Details
@@ -75,7 +83,8 @@
 - [x] Zombie
 - [x] Basic mob AI
 - [x] Spectator mode
-- [x] Third-person camera
+- [x] grass blending 
+- [ ] Third-person camera
 - [ ] Improved chunk loading
 - [ ] More entities
 - [ ] Improved physics
