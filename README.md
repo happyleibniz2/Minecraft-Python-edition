@@ -11,9 +11,15 @@
 
 - zombie mob
 
+- cow mob
+
+- sheep mob
+
 - simple zombie ai
 
 - Better water texture
+
+- Better grass texture
 
 - Water physics (sort of)
 
