@@ -228,6 +228,13 @@ class PassiveMob(Entity):
         raise NotImplementedError
 
     def _draw_cube(self, part, xRot=0.0, yRot=0.0, zRot=0.0):
+        """Draw a Minecraft model box.
+
+        ``part`` is ``(x, y, z, w, h, d, pivotX, pivotY, pivotZ, texU, texV)``
+        where the box coordinates are **relative to the pivot**, exactly like
+        ``ModelPart``: the pivot is translated to first, rotation happens about
+        it, and the box is then laid out around that origin.
+        """
         x, y, z, w, h, d, ox, oy, oz, texU, texV = part
 
         glPushMatrix()

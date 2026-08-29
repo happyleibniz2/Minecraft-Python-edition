@@ -307,25 +307,52 @@ class Scene:
         finally:
             glPopAttrib()
 
-    def spawn_entity(self, factory, label):
+    def entity_types(self):
+        """All spawnable entity types, keyed by entity id."""
+        from game.entity.Cow import Cow
+        from game.entity.Sheep import Sheep
+        from game.entity.Zombie import Zombie
+
+        return {"cow": Cow, "sheep": Sheep, "zombie": Zombie}
+
+    def spawn_entity(self, factory, label, position=None):
         """Spawn an entity near the player, like Minecraft's spawn eggs."""
         import random
 
-        if self.player is None:
-            print("No player to spawn near.")
-            return None
-
-        px, py, pz = self.player.position
-        dx = random.randint(-4, 4)
-        dz = random.randint(-4, 4)
-        spawn_pos = [px + dx, py + 2, pz + dz]
+        if position is None:
+            if self.player is None:
+                print("No player to spawn near.")
+                return None
+            px, py, pz = self.player.position
+            dx = random.randint(-4, 4)
+            dz = random.randint(-4, 4)
+            position = [px + dx, py + 2, pz + dz]
 
         entity = factory(self)
-        entity.position = spawn_pos
+        entity.position = list(position)
         entity.rotation[1] = random.randint(0, 360)
         self.entity.append(entity)
-        print(f"{label} spawned at {spawn_pos}")
+        print(f"{label} spawned at {position}")
         return entity
+
+    def spawn_entity_by_id(self, entity_id, position=None):
+        """Spawn by entity id, used by spawn eggs."""
+        factory = self.entity_types().get(entity_id)
+        if factory is None:
+            print(f"Unknown entity id: {entity_id}")
+            return None
+        return self.spawn_entity(factory, entity_id.capitalize(), position)
+
+    def spawn_random_entity(self):
+        """Spawn one random entity out of every loaded entity type."""
+        import random
+
+        types = self.entity_types()
+        if not types:
+            print("No entity types are loaded.")
+            return None
+        entity_id = random.choice(sorted(types))
+        return self.spawn_entity_by_id(entity_id)
 
     def spawn_cow(self):
         from game.entity.Cow import Cow

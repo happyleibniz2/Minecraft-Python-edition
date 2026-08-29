@@ -72,6 +72,9 @@ def load_textures(self):
     configure_water_textures(self)
     configure_grass_textures(self)
 
+    from game.entity.SpawnEggs import configure_spawn_eggs
+    configure_spawn_eggs(self)
+
 
 def configure_grass_textures(self):
     """Wire up the Minecraft 1.20.1 three-texture grass block.

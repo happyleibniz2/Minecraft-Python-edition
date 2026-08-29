@@ -30,6 +30,7 @@ class Inventory:
         self.heartAnimation = []
         self.draggingItem = []
         self.window = None
+        self.durability = {}
 
         old = False
         for i in range(10):
@@ -71,7 +72,42 @@ class Inventory:
 
     def giveItem(self, name, count=1):
         """Insert items using Minecraft's merge-then-fill order."""
-        return insert_stack(self.inventory, self.insert_order, name, count, MAX_STACK)
+        from game.Items import max_stack_size
+
+        return insert_stack(self.inventory, self.insert_order, name, count,
+                            max_stack_size(name))
+
+    def tool_durability(self, slot):
+        """Remaining durability of the tool in ``slot``."""
+        from game.Items import max_durability
+
+        stack = self.inventory.get(slot, ["", 0])
+        if is_empty(stack):
+            return 0
+        if slot not in self.durability:
+            self.durability[slot] = max_durability(stack[0])
+        return self.durability[slot]
+
+    def damage_tool(self, slot, amount=1):
+        """Spend durability; the tool breaks and vanishes when it runs out."""
+        from game.Items import is_tool, max_durability
+
+        stack = self.inventory.get(slot, ["", 0])
+        if is_empty(stack) or not is_tool(stack[0]):
+            return False
+
+        remaining = self.durability.get(slot)
+        if remaining is None:
+            remaining = max_durability(stack[0])
+        remaining -= amount
+
+        if remaining <= 0:
+            self.inventory[slot] = ["", 0]
+            self.durability.pop(slot, None)
+            return True
+
+        self.durability[slot] = remaining
+        return False
 
     def get_inventory_blocks(self):
         return self.inventory
@@ -201,18 +237,21 @@ class Inventory:
 
     def addBlock(self, name, count=1):
         """Pick up items: top up the selected slot and matching stacks first."""
+        from game.Items import max_stack_size
+
         if not name or count <= 0:
             return 0
 
+        limit = max_stack_size(name)
         selected = self.inventory.get(self.activeInventory, ["", 0])
-        if not is_empty(selected) and selected[0] == name and selected[1] < MAX_STACK:
-            moved = min(MAX_STACK - selected[1], count)
+        if not is_empty(selected) and selected[0] == name and selected[1] < limit:
+            moved = min(limit - selected[1], count)
             self.inventory[self.activeInventory] = [name, selected[1] + moved]
             count -= moved
             if count <= 0:
                 return 0
         elif is_empty(selected):
-            moved = min(MAX_STACK, count)
+            moved = min(limit, count)
             self.inventory[self.activeInventory] = [name, moved]
             count -= moved
             if count <= 0:

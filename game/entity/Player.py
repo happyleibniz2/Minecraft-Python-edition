@@ -5,6 +5,7 @@ from OpenGL.GL import *
 from game.blocks.BlockEvent import *
 from functions import roundPos
 from game.blocks.DestroyBlock import DestroyBlock
+from game.Items import is_item
 from settings import *
 
 class Player:
@@ -121,6 +122,12 @@ class Player:
                 self.position[1] + vertical * self.speed * dt,
                 self.position[2],
             ]
+            # flying is not falling; clear fall state so leaving spectator
+            # never applies phantom fall damage
+            self.dy = 0
+            self.playerFallY = 0
+            self.bInAir = False
+            self.lastPlayerPosOnGround = list(self.position)
             self.setShift(False, dt)
         else:
             self.setShift(sneaking, dt)
@@ -187,11 +194,19 @@ class Player:
         self.gl.fov += (target_fov - self.gl.fov) * blend
 
     def give_debug_items(self):
-        for block in (
+        items = [
             "grass", "stone", "log_birch", "cactus", "water_bucket",
             "crafting_table", "debug", "ancient_debris", "tnt", "log_oak",
-        ):
-            self.inventory.addBlock(block)
+        ]
+        # every wooden tool that has a texture loaded
+        items += [name for name in (
+            "wooden_pickaxe", "wooden_axe", "wooden_shovel",
+            "wooden_hoe", "wooden_sword",
+        ) if name in self.gl.inventory_textures]
+        # spawn eggs for every registered entity, like Minecraft's creative tab
+        items += sorted(getattr(self.gl, "spawn_egg_items", {}))
+        for item in items:
+            self.inventory.addBlock(item)
 
     def _has_support(self, x, y, z):
         support_y = round(y - 1.75)
@@ -339,6 +354,19 @@ class Player:
                         openBlockInventory(self, self.gl.cubes.cubes[blockByVec[1]], self.gl)
                         return
             selected = self.inventory.inventory[self.inventory.activeInventory]
+            spawn_eggs = getattr(self.gl, "spawn_egg_items", {})
+            if selected[0] in spawn_eggs and selected[1]:
+                anchor = blockByVec[1] or blockByVec[0]
+                if anchor:
+                    # Minecraft spawns the mob against the clicked face
+                    spawn_pos = [anchor[0], anchor[1] + 1.75, anchor[2]]
+                    entity = self.gl.spawn_entity_by_id(spawn_eggs[selected[0]], spawn_pos)
+                    if entity is not None:
+                        self.inventory.inventory[self.inventory.activeInventory][1] -= 1
+                        if self.inventory.inventory[self.inventory.activeInventory][1] <= 0:
+                            self.inventory.inventory[self.inventory.activeInventory] = ["", 0]
+                return
+
             if selected[0] == "water_bucket" and selected[1] and blockByVec[1]:
                 water_pos = tuple(blockByVec[1])
                 player_pos = tuple(roundPos((self.position[0], self.position[1] - 1, self.position[2])))
@@ -355,7 +383,8 @@ class Player:
                 playerPos = tuple(roundPos((self.position[0], self.position[1] - 1, self.position[2])))
                 playerPos2 = tuple(roundPos((self.position[0], self.position[1], self.position[2])))
                 blockByVec = placement[0], placement[1], placement[2]
-                if self.inventory.inventory[self.inventory.activeInventory][0] in self.gl.block and \
+                held_name = self.inventory.inventory[self.inventory.activeInventory][0]
+                if held_name in self.gl.block and not is_item(held_name) and \
                         self.inventory.inventory[self.inventory.activeInventory][1] and blockByVec != playerPos and \
                         blockByVec != playerPos2:
                     self.gl.cubes.add(blockByVec, self.inventory.inventory[self.inventory.activeInventory][0], now=True)
@@ -363,7 +392,8 @@ class Player:
                     self.inventory.inventory[self.inventory.activeInventory][1] -= 1
 
     def collide(self, pos):
-        if -90 > pos[1] > -9000:
+        # spectators are immune to all damage, exactly like Minecraft
+        if -90 > pos[1] > -9000 and not self.is_spectator:
             if not self.playerDead:
                 self.hp -= 2
                 self.gl.blockSound.damageByBlock("ahh", 1)

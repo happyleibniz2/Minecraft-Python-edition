@@ -22,7 +22,10 @@ def same_item(a, b):
 
 
 def max_stack_size(name):
-    return MAX_STACK
+    """Per-item stack limit; tools are unstackable like in Minecraft."""
+    from game.Items import max_stack_size as item_stack_size
+
+    return item_stack_size(name)
 
 
 def left_click(slot, held, take_only=False, place_only=False):

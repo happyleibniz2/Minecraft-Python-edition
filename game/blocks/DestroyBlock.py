@@ -3,6 +3,8 @@ import os
 import pyglet
 from OpenGL.GL import *
 
+from game.Items import can_harvest, is_tool, mining_speed
+
 class DestroyBlock:
     BLOCK_HARDNESS = {
         "grass": 0.6,
@@ -83,7 +85,8 @@ class DestroyBlock:
             self.destroyStage = 0
             self.destroyPos = blockByVec[0]
 
-        break_time = self.get_break_time(blockName)
+        held = self._held_item()
+        break_time = self.get_break_time(blockName, held)
         if break_time is None:
             self.destroyStage = -1
             return
@@ -98,38 +101,64 @@ class DestroyBlock:
             cube = self.gl.cubes.cubes.get(blockByVec[0])
             if cube is None:
                 return
-            print(cube.name)
-            if cube.name == "leaves_oak":
-                self.gl.droppedBlock.addBlock(blockByVec[0], "sapling")
-            else:
-                self.gl.droppedBlock.addBlock(blockByVec[0], cube.name)
 
+            # Minecraft only drops the block when the right tool was used
+            if can_harvest(held, cube.name):
+                if cube.name == "leaves_oak":
+                    self.gl.droppedBlock.addBlock(blockByVec[0], "sapling")
+                else:
+                    self.gl.droppedBlock.addBlock(blockByVec[0], cube.name)
+
+            self._damage_tool(held)
             self.gl.blockSound.playBlockSound(cube.name)
             self.gl.particles.addParticle(cube.p, cube, direction="down")
             self.gl.cubes.remove(blockByVec[0])
 
+    def _held_item(self):
+        """Name of the item in the player's selected hotbar slot."""
+        player = getattr(self.gl, "player", None)
+        inventory = getattr(player, "inventory", None)
+        if inventory is None:
+            return ""
+        stack = inventory.inventory.get(inventory.activeInventory, ["", 0])
+        return stack[0] if stack[1] else ""
+
+    def _damage_tool(self, held):
+        """Spend one durability point, breaking the tool when exhausted."""
+        if not is_tool(held):
+            return
+        player = getattr(self.gl, "player", None)
+        inventory = getattr(player, "inventory", None)
+        if inventory is None:
+            return
+        inventory.damage_tool(inventory.activeInventory)
+
     @classmethod
-    def get_break_time(cls, block_name):
+    def get_break_time(cls, block_name, held=""):
+        """Break time in seconds, following Minecraft's formula.
+
+        ``damage = speed / hardness``, divided by 30 when the block can be
+        harvested and by 100 when it cannot, then rounded up to whole ticks.
+        """
         if block_name.endswith("_ore"):
             hardness = 3.0
-            requires_tool = True
         elif block_name.endswith("_wool"):
             hardness = 0.8
-            requires_tool = False
         elif block_name.startswith("log_"):
             hardness = 2.0
-            requires_tool = False
         elif block_name.startswith("leaves_"):
             hardness = 0.2
-            requires_tool = False
         else:
             hardness = cls.BLOCK_HARDNESS.get(block_name, 1.0)
-            requires_tool = block_name in cls.TOOL_REQUIRED
 
         if hardness is None:
             return None
         if hardness == 0:
             return 0
 
-        ticks = math.ceil(hardness * (100 if requires_tool else 30))
+        speed = mining_speed(held, block_name)
+        harvestable = can_harvest(held, block_name)
+        divisor = 30 if harvestable else 100
+
+        ticks = math.ceil(hardness * divisor / speed)
         return max(1, ticks) / 20

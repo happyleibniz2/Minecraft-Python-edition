@@ -68,15 +68,25 @@ class droppedBlock:
                                r1[2][0] + kx, r1[2][1] + ky, r1[2][2] + kz,
                                r1[3][0] + kx, r1[3][1] + ky, r1[3][2] + kz)
 
-            block = self.gl.block[i[1][1]]
+            name = i[1][1]
             tex_coords = ('t2f', (0, 0, 1, 0, 1, 1, 0, 1))
-            self.gl.stuffBatch.add(4, GL_QUADS, block[4], ('v3f', vertexes[0]), tex_coords)
-            if i[1][5]:
-                self.gl.stuffBatch.add(4, GL_QUADS, block[5], ('v3f', vertexes[1]), tex_coords)
-                self.gl.stuffBatch.add(4, GL_QUADS, block[0], ('v3f', vertexes[2]), tex_coords)
-                self.gl.stuffBatch.add(4, GL_QUADS, block[1], ('v3f', vertexes[3]), tex_coords)
-                self.gl.stuffBatch.add(4, GL_QUADS, block[2], ('v3f', vertexes[4]), tex_coords)
-                self.gl.stuffBatch.add(4, GL_QUADS, block[3], ('v3f', vertexes[5]), tex_coords)
+            block = self.gl.block.get(name)
+
+            if block is not None:
+                self.gl.stuffBatch.add(4, GL_QUADS, block[4], ('v3f', vertexes[0]), tex_coords)
+                if i[1][5]:
+                    self.gl.stuffBatch.add(4, GL_QUADS, block[5], ('v3f', vertexes[1]), tex_coords)
+                    self.gl.stuffBatch.add(4, GL_QUADS, block[0], ('v3f', vertexes[2]), tex_coords)
+                    self.gl.stuffBatch.add(4, GL_QUADS, block[1], ('v3f', vertexes[3]), tex_coords)
+                    self.gl.stuffBatch.add(4, GL_QUADS, block[2], ('v3f', vertexes[4]), tex_coords)
+                    self.gl.stuffBatch.add(4, GL_QUADS, block[3], ('v3f', vertexes[5]), tex_coords)
+            else:
+                # items (buckets, saplings...) have no block faces; Minecraft
+                # renders them as a flat sprite instead of a cube
+                item = self.gl.texture.get(name)
+                if item is not None:
+                    self.gl.stuffBatch.add(4, GL_QUADS, item, ('v3f', vertexes[0]), tex_coords)
+                    self.gl.stuffBatch.add(4, GL_QUADS, item, ('v3f', vertexes[1]), tex_coords)
 
             if i[1][3][1] == "-":
                 i[1][3][0] -= 0.003 * dt * 60
