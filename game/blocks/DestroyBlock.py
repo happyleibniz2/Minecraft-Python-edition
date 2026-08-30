@@ -24,6 +24,7 @@ class DestroyBlock:
         "sapling": 0.0,
         "tnt": 0.0,
         "torch": 0.0,
+        "tall_grass": 0.0,
         "ancient_debris": 30.0,
         "bone_block": 2.0,
         "cow": 0.5,
@@ -104,7 +105,7 @@ class DestroyBlock:
                 return
 
             # Minecraft only drops the block when the right tool was used
-            if can_harvest(held, cube.name):
+            if can_harvest(held, cube.name) and cube.name != "tall_grass":
                 if cube.name == "leaves_oak":
                     self.gl.droppedBlock.addBlock(blockByVec[0], "sapling")
                 else:

@@ -39,7 +39,11 @@ def load_options():
 
 def save_options():
     with open(OPTIONS_FILE, "w", encoding="utf-8") as options_file:
-        json.dump({"shaders": SHADERS, "player_shadows": PLAYER_SHADOWS}, options_file, indent=2)
+        json.dump({
+            "shaders": SHADERS,
+            "player_shadows": PLAYER_SHADOWS,
+            "leaves_sway": LEAVES_SWAY,
+        }, options_file, indent=2)
 
 
 def set_shaders(enabled):
@@ -54,9 +58,16 @@ def set_player_shadows(enabled):
     save_options()
 
 
+def set_leaves_sway(enabled):
+    global LEAVES_SWAY
+    LEAVES_SWAY = bool(enabled)
+    save_options()
+
+
 _options = load_options()
 SHADERS = bool(_options.get("shaders", True))
 PLAYER_SHADOWS = bool(_options.get("player_shadows", True))
+LEAVES_SWAY = bool(_options.get("leaves_sway", True))
 
 monitor = pygame.display.Info()
 #WIDTH = monitor.current_w

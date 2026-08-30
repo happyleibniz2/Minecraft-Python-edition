@@ -65,23 +65,23 @@ class CubeHandler:
             x, y, z = x + dx, y + dy, z + dz
         return None, None
 
-    REPLACEABLE = ("water", "lava")
+    REPLACEABLE = ("water", "lava", "tall_grass")
 
     def add(self, p, t, now=False, fluid_level=0, fluid_source=None, fluid_falling=False):
-        if t == "torch" and (p[0], p[1] - 1, p[2]) not in self.collidable:
+        if t in ("torch", "tall_grass") and (p[0], p[1] - 1, p[2]) not in self.collidable:
             return False
         if p in self.cubes:
             if t == "water" and self.cubes[p].name == "water":
                 source = fluid_level == 0 and not fluid_falling if fluid_source is None else fluid_source
                 self._set_water_state(p, FluidState(fluid_level, source, fluid_falling))
                 return True
-            if t == "water" or self.cubes[p].name not in self.REPLACEABLE:
+            if self.cubes[p].name not in self.REPLACEABLE:
                 return False
             self._clear_fluid(p)
         cube = self.cubes[p] = Cube(t, p, self.block[t],
                                     'alpha' if t in self.alpha_textures else 'blend' if (t == 'water' or t == "lava") else 'solid')
 
-        if cube.name not in ('water', 'lava', 'torch'):
+        if cube.name not in ('water', 'lava', 'torch', 'tall_grass'):
             self.collidable[p] = cube
         elif cube.name == "water":
             source = fluid_level == 0 and not fluid_falling if fluid_source is None else fluid_source
@@ -130,11 +130,13 @@ class CubeHandler:
         # standing torches break when their supporting block disappears
         above = (p[0], p[1] + 1, p[2])
         above_cube = self.cubes.get(above)
-        if above_cube is not None and above_cube.name == "torch" and p not in self.collidable:
+        if above_cube is not None and above_cube.name in ("torch", "tall_grass") and p not in self.collidable:
+            unsupported = above_cube.name
             self.remove(above)
-            dropped = getattr(self.gl, "droppedBlock", None)
-            if dropped is not None:
-                dropped.addBlock(above, "torch")
+            if unsupported == "torch":
+                dropped = getattr(self.gl, "droppedBlock", None)
+                if dropped is not None:
+                    dropped.addBlock(above, "torch")
 
     def _clear_fluid(self, p):
         self.fluids.pop(p, None)
@@ -322,6 +324,8 @@ class CubeHandler:
         if neighbour is None:
             return True
         if cube.name != "water":
+            if cube.name.startswith("leaves_") and neighbour.name == cube.name:
+                return False
             return neighbour.type in ('alpha', 'blend')
         if neighbour.name != "water":
             return neighbour.type in ('alpha', 'blend')
@@ -347,11 +351,17 @@ class CubeHandler:
                 return self.gl.texture["water_flow"]
         return cube.t[face_index]
 
-    def get_light_coordinates(self, face_vertices):
+    def get_light_coordinates(self, face_vertices, cube=None):
         light = getattr(self.gl, "light", None)
         if light is None:
             return 't2f', (0, 0, 1, 0, 1, 1, 0, 1)
-        return light.texture_coordinates(face_vertices)
+        return light.texture_coordinates(face_vertices, cube)
+
+    def get_sway_attribute(self, face_vertices, cube):
+        light = getattr(self.gl, "light", None)
+        if light is None:
+            return None
+        return light.sway_attribute(face_vertices, cube)
 
     def get_water_color(self, p, fog=False):
         x, _, z = p
@@ -555,6 +565,19 @@ class CubeHandler:
 
         for _, chunk in visible:
             chunk.render_opaque()
+
+        # Binary foliage/plant cutouts write depth only for genuinely opaque
+        # texels. Keeping blending off prevents partial mip alpha from hiding
+        # terrain behind leaves.
+        glPushAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT)
+        try:
+            glDisable(GL_BLEND)
+            glEnable(GL_ALPHA_TEST)
+            glAlphaFunc(GL_GREATER, 0.5)
+            for _, chunk in visible:
+                chunk.render_cutout()
+        finally:
+            glPopAttrib()
 
         # tinted grass side overlays: alpha cut-outs sitting on the dirt sides
         glPushAttrib(GL_ENABLE_BIT | GL_DEPTH_BUFFER_BIT)

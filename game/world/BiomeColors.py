@@ -20,6 +20,7 @@ from game.world.Biomes import all_biomes
 
 # temperature / downfall per biome, mirroring Minecraft's biome definitions
 BIOME_CLIMATE = {
+    "plains": (0.8, 0.4),
     "forest": (0.7, 0.8),
     "desert": (2.0, 0.0),
     "ocean": (0.5, 0.5),

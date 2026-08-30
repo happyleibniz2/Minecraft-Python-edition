@@ -128,6 +128,9 @@ def toggle_shaders():
 def toggle_player_shadows():
     settings.set_player_shadows(not settings.PLAYER_SHADOWS)
 
+def toggle_leaves_sway():
+    settings.set_leaves_sway(not settings.LEAVES_SWAY)
+
 def edit_panorama():
     global mainFunction
     mainFunction = draw_panorama_menu
@@ -286,6 +289,18 @@ def draw_settings_menu(mc):
     player_shadow_button.x = scene.WIDTH // 2 - (player_shadow_button.button.width // 2) - 170
     player_shadow_button.y = scene.HEIGHT // 2 - (player_shadow_button.button.height // 2) + 70
     player_shadow_button.update(mp, mc)
+
+    leaves_sway_button = Button(
+        scene,
+        f"Leaves Sway: {'YES' if settings.LEAVES_SWAY else 'NO'}",
+        0,
+        0,
+        text_x=scene.WIDTH // 2 - (400 // 2),
+    )
+    leaves_sway_button.setEvent(toggle_leaves_sway)
+    leaves_sway_button.x = scene.WIDTH // 2 - (leaves_sway_button.button.width // 2) - 170
+    leaves_sway_button.y = scene.HEIGHT // 2 - (leaves_sway_button.button.height // 2) + 120
+    leaves_sway_button.update(mp, mc)
 
     sound.musicPlayer.set_volume(soundVolumeSliderBox.val / 100)
     sound.volume = soundVolumeSliderBox.val / 100

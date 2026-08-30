@@ -71,6 +71,7 @@ def load_textures(self):
     from game.blocks.Water import configure_water_textures
     configure_water_textures(self)
     configure_grass_textures(self)
+    configure_plant_textures(self)
 
     from game.entity.SpawnEggs import configure_spawn_eggs
     configure_spawn_eggs(self)
@@ -104,6 +105,28 @@ def configure_grass_textures(self):
         image.width = 22
         image.height = 22
         self.inventory_textures["grass"] = image
+
+
+def configure_plant_textures(self):
+    """Register crossed short grass and preserve binary leaf cutouts."""
+    tall_grass = self.texture.get("tall_grass")
+    if tall_grass is not None:
+        self.block["tall_grass"] = (tall_grass,) * 6
+        image = pyglet.image.load(os.path.join("textures", "tall_grass.png"))
+        image.width = 22
+        image.height = 22
+        self.inventory_textures["tall_grass"] = image
+
+    for name in ("leaves_oak", "leaves_taiga", "tall_grass"):
+        group = self.texture.get(name)
+        if group is None:
+            continue
+        texture = group.texture
+        glBindTexture(texture.target, texture.id)
+        # Generated mipmaps average opaque and transparent texels, filling the
+        # holes at distance. Binary cutouts use nearest sampling instead.
+        glTexParameteri(texture.target, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
+        glTexParameteri(texture.target, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
 
 
 def translateSeed(seed):

@@ -1,4 +1,4 @@
-all_biomes = ["forest", "desert", "ocean", "taiga", "mountains", "big_mountains"]
+all_biomes = ["forest", "desert", "ocean", "taiga", "mountains", "big_mountains", "plains"]
 
 WATER_COLORS = {
     "forest": (0x3F, 0x76, 0xE4),
@@ -7,6 +7,7 @@ WATER_COLORS = {
     "taiga": (0x3D, 0x57, 0xD6),
     "mountains": (0x3F, 0x76, 0xE4),
     "big_mountains": (0x39, 0x38, 0xC9),
+    "plains": (0x3F, 0x76, 0xE4),
 }
 
 WATER_FOG_COLORS = {
@@ -16,6 +17,7 @@ WATER_FOG_COLORS = {
     "taiga": (0x05, 0x05, 0x33),
     "mountains": (0x05, 0x05, 0x33),
     "big_mountains": (0x05, 0x05, 0x33),
+    "plains": (0x05, 0x05, 0x33),
 }
 
 
@@ -32,6 +34,8 @@ def getBiomeByTemp(temp):
         return all_biomes[2]  # ocean
     if temp >= 12:
         return all_biomes[1]  # desert
+    if temp >= 7:
+        return all_biomes[6]  # plains
     if temp >= 2:
         return all_biomes[0]  # forest
     if temp >= -8:
@@ -52,6 +56,8 @@ class Biomes:
             return "sand"
         if self.biome == "forest" :
             return "grass"
+        if self.biome == "plains":
+            return "grass"
         if self.biome == "taiga":
             return "grass"
         if self.biome == "mountains":
@@ -63,11 +69,13 @@ class Biomes:
     def getBiomePlant(self):
         if self.biome == "desert":
             return "cactus"
+        if self.biome == "plains":
+            return "tall_grass"
 
     def getBiomeDirt(self):
         if self.biome == "desert":
             return "sand"
-        if self.biome == "forest" or self.biome == "taiga" or self.biome == "mountains" \
+        if self.biome == "forest" or self.biome == "plains" or self.biome == "taiga" or self.biome == "mountains" \
                 or self.biome == "big_mountains":
             return "dirt"
         if self.biome == "ocean":
@@ -77,7 +85,7 @@ class Biomes:
     def getBiomeStone(self):
         if self.biome == "desert":
             return "sandstone"
-        if self.biome == "forest" or self.biome == "taiga" or self.biome == "mountains":
+        if self.biome == "forest" or self.biome == "plains" or self.biome == "taiga" or self.biome == "mountains":
             return "stone"
         if self.biome == "ocean":
             return "gravel"

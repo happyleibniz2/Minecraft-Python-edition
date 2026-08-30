@@ -66,6 +66,7 @@ class worldGenerator:
                 50 if biome_name in ("forest", "taiga") else 70,
                 biome_name == "ocean",
                 biome_name in ("forest", "taiga"),
+                biome.getBiomePlant(),
             )
             self._biome_cache[biome_name] = data
         return data
@@ -89,7 +90,7 @@ class worldGenerator:
                 y = world_perlin(x, z)
                 biome_name = getBiomeByTemp(biome_perlin(x, z) * 3)
                 (activeBiome, grass, dirt, stone,
-                 ch, is_ocean, is_woodland) = self._biome_data(biome_name)
+                 ch, is_ocean, is_woodland, plant) = self._biome_data(biome_name)
 
                 if biome_name == "mountains":
                     if -3 < oldY - y < 3:
@@ -118,6 +119,11 @@ class worldGenerator:
 
                 if spawnTree and is_woodland:
                     self.spawnTree(x, y, z)
+                elif plant == "tall_grass" and randint(0, 6) == 0:
+                    add((x, y + 1, z), "tall_grass")
+                elif plant == "cactus" and randint(0, 31) == 0:
+                    for cactus_y in range(y + 1, y + randint(2, 3) + 1):
+                        add((x, cactus_y, z), "cactus")
 
                 add((x, 0, z), "bedrock")
 

@@ -16,15 +16,30 @@ varying float torchLight;
 varying float fogDistance;
 varying vec3 worldPosition;
 varying vec4 shadowCoord;
+attribute float swayWeight;
 uniform mat4 inverseViewMatrix;
 uniform mat4 shadowMatrix;
+uniform float leavesSway;
+uniform float gameTime;
+uniform vec2 cloudOffset;
 
 void main() {
-    gl_Position = ftransform();
+    vec4 animatedPosition = gl_Vertex;
+    if (leavesSway > 0.5 && swayWeight > 0.0) {
+        float primary = sin(gameTime * 1.65
+            + gl_Vertex.x * 0.73 + gl_Vertex.z * 0.51 + cloudOffset.x * 0.035);
+        float detail = sin(gameTime * 2.47
+            + gl_Vertex.x * 1.31 - gl_Vertex.z * 0.87 + cloudOffset.y * 0.05);
+        float motion = (primary * 0.72 + detail * 0.28) * swayWeight;
+        animatedPosition.x += motion * 0.075;
+        animatedPosition.z += motion * 0.032;
+    }
+
+    gl_Position = gl_ModelViewProjectionMatrix * animatedPosition;
     gl_TexCoord[0] = gl_MultiTexCoord0;
     vertexColor = gl_Color;
     torchLight = gl_MultiTexCoord0.z;
-    vec4 viewPosition = gl_ModelViewMatrix * gl_Vertex;
+    vec4 viewPosition = gl_ModelViewMatrix * animatedPosition;
     vec4 world = inverseViewMatrix * viewPosition;
     fogDistance = length(viewPosition.xyz);
     worldPosition = world.xyz;
@@ -167,6 +182,8 @@ class Light:
         self.cloud_offset_uniform = None
         self.cloud_coverage_uniform = None
         self.weather_uniform = None
+        self.leaves_sway_uniform = None
+        self.sway_attribute_location = -1
         self.fog_color = (0.5, 0.7, 1.0)
         self.fog_start = 10.0
         self.fog_end = 80.0
@@ -203,6 +220,8 @@ class Light:
             self.cloud_offset_uniform = glGetUniformLocation(self.shader, "cloudOffset")
             self.cloud_coverage_uniform = glGetUniformLocation(self.shader, "cloudCoverage")
             self.weather_uniform = glGetUniformLocation(self.shader, "weatherStrength")
+            self.leaves_sway_uniform = glGetUniformLocation(self.shader, "leavesSway")
+            self.sway_attribute_location = glGetAttribLocation(self.shader, "swayWeight")
             self._initialize_shadow_map()
             return True
         except Exception as error:
@@ -262,7 +281,7 @@ class Light:
                 brightest = light
         return max(0.0, min(1.0, brightest))
 
-    def texture_coordinates(self, face_vertices):
+    def texture_coordinates(self, face_vertices, cube=None):
         """UV plus per-vertex torch light encoded in texture-coordinate Z."""
         uv = ((0, 0), (1, 0), (1, 1), (0, 1))
         coords = []
@@ -270,6 +289,24 @@ class Light:
             vertex = face_vertices[index * 3:index * 3 + 3]
             coords.extend((u, v, self.get_vertex_light(vertex)))
         return 't3f', tuple(coords)
+
+    def sway_attribute(self, face_vertices, cube):
+        """Per-vertex wind weight for leaves/grass, using a generic attribute."""
+        if self.sway_attribute_location < 0 or cube is None:
+            return None
+        if not (cube.name.startswith("leaves_") or cube.name == "tall_grass"):
+            return None
+
+        base = cube.p[1] - 0.5
+        weights = []
+        for index in range(4):
+            y = face_vertices[index * 3 + 1]
+            height = max(0.0, min(1.0, y - base))
+            if cube.name == "tall_grass":
+                weights.append(height * 1.35)
+            else:
+                weights.append(0.35 + height * 0.65)
+        return f"{self.sway_attribute_location}g1f", tuple(weights)
 
     def begin_render(self):
         if not self.enabled:
@@ -298,6 +335,7 @@ class Light:
         glUniform2f(self.cloud_offset_uniform, *self.cloud_offset)
         glUniform1f(self.cloud_coverage_uniform, self.cloud_coverage)
         glUniform1f(self.weather_uniform, self.weather_strength)
+        glUniform1f(self.leaves_sway_uniform, 1.0 if settings.LEAVES_SWAY else 0.0)
 
         if self.shadow_ready:
             glActiveTexture(GL_TEXTURE1)
@@ -329,7 +367,7 @@ class Light:
         glClear(GL_DEPTH_BUFFER_BIT)
         glEnable(GL_DEPTH_TEST)
         glEnable(GL_ALPHA_TEST)
-        glAlphaFunc(GL_GREATER, 0.1)
+        glAlphaFunc(GL_GREATER, 0.5)
         glDisable(GL_BLEND)
 
         glMatrixMode(GL_PROJECTION)

@@ -15,6 +15,7 @@ class RenderChunk:
         self.gl = gl
         self.cubes = {}          # world pos -> Cube
         self.batch = pyglet.graphics.Batch()
+        self.cutout_batch = pyglet.graphics.Batch()
         self.water_batch = pyglet.graphics.Batch()
         self.overlay_batch = pyglet.graphics.Batch()
         self.dirty = True
@@ -32,6 +33,7 @@ class RenderChunk:
     def rebuild(self):
         """Rebuild chunk batch from cubes."""
         self.batch = pyglet.graphics.Batch()
+        self.cutout_batch = pyglet.graphics.Batch()
         self.water_batch = pyglet.graphics.Batch()
         self.overlay_batch = pyglet.graphics.Batch()
         global_cubes = self.gl.cubes.cubes
@@ -41,6 +43,9 @@ class RenderChunk:
         for pos, cube in self.cubes.items():
             if cube.name == "torch":
                 self._add_torch(cube, handler)
+                continue
+            if cube.name == "tall_grass":
+                self._add_cross_plant(cube, handler)
                 continue
             x, y, z = pos
             vertices = None
@@ -85,12 +90,18 @@ class RenderChunk:
 
         tex_coords = (('t2f', (0, 0, 1, 0, 1, 1, 0, 1))
                       if cube.name == "water"
-                      else handler.get_light_coordinates(face_vertices))
-        batch = self.water_batch if cube.name == "water" else self.batch
-        batch.add(4, GL_QUADS, tex_group,
-                  ('v3f', face_vertices),
-                  tex_coords,
-                  clr)
+                      else handler.get_light_coordinates(face_vertices, cube))
+        if cube.name == "water":
+            batch = self.water_batch
+        elif cube.type == "alpha":
+            batch = self.cutout_batch
+        else:
+            batch = self.batch
+        attributes = [('v3f', face_vertices), tex_coords, clr]
+        sway = handler.get_sway_attribute(face_vertices, cube)
+        if sway is not None:
+            attributes.append(sway)
+        batch.add(4, GL_QUADS, tex_group, *attributes)
 
         if cube.name == "water":
             return
@@ -99,10 +110,15 @@ class RenderChunk:
         overlay = handler.get_grass_overlay(cube, face_index, shade)
         if overlay is not None:
             overlay_group, overlay_color = overlay
-            self.overlay_batch.add(4, GL_QUADS, overlay_group,
-                                   ('v3f', face_vertices),
-                                   handler.get_light_coordinates(face_vertices),
-                                   overlay_color)
+            attributes = [
+                ('v3f', face_vertices),
+                handler.get_light_coordinates(face_vertices, cube),
+                overlay_color,
+            ]
+            sway = handler.get_sway_attribute(face_vertices, cube)
+            if sway is not None:
+                attributes.append(sway)
+            self.overlay_batch.add(4, GL_QUADS, overlay_group, *attributes)
 
     def _add_torch(self, cube, handler):
         """Render a standing torch as two crossed transparent planes."""
@@ -122,18 +138,47 @@ class RenderChunk:
         )
         texture = handler.get_face_texture(cube, 3)
         for vertices in quads:
-            self.batch.add(4, GL_QUADS, texture,
-                           ('v3f', vertices),
-                           handler.get_light_coordinates(vertices),
-                           handler.top_color)
+            self.cutout_batch.add(4, GL_QUADS, texture,
+                                  ('v3f', vertices),
+                                  handler.get_light_coordinates(vertices, cube),
+                                  handler.top_color)
+
+    def _add_cross_plant(self, cube, handler):
+        """Render Minecraft short grass as two crossed full-height planes."""
+        x, y, z = cube.p
+        bottom, top = y - 0.5, y + 0.5
+        half = 0.5
+        quads = (
+            (x - half, bottom, z - half, x + half, bottom, z + half,
+             x + half, top, z + half, x - half, top, z - half),
+            (x - half, bottom, z + half, x + half, bottom, z - half,
+             x + half, top, z - half, x - half, top, z + half),
+        )
+        texture = handler.get_face_texture(cube, 3)
+        color = handler.get_block_face_color(cube, 3, 1.0) or handler.top_color
+        for vertices in quads:
+            attributes = [
+                ('v3f', vertices),
+                handler.get_light_coordinates(vertices, cube),
+                color,
+            ]
+            sway = handler.get_sway_attribute(vertices, cube)
+            if sway is not None:
+                attributes.append(sway)
+            self.cutout_batch.add(4, GL_QUADS, texture, *attributes)
 
     def render_opaque(self):
         if not self.dirty:
             self.batch.draw()
 
+    def render_cutout(self):
+        if not self.dirty:
+            self.cutout_batch.draw()
+
     def render_shadow(self):
         if not self.dirty:
             self.batch.draw()
+            self.cutout_batch.draw()
 
     def render_overlay(self):
         if not self.dirty:
