@@ -570,6 +570,18 @@ class CubeHandler:
 
         self.visible_water_chunks = sorted(visible, key=lambda item: item[0], reverse=True)
 
+    def render_shadow(self, center, radius):
+        """Render nearby opaque chunk geometry into the sun/moon depth map."""
+        radius_squared = radius * radius
+        for chunk in self.render_chunks.values():
+            if chunk.dirty:
+                continue
+            cx = chunk.cx * self.RENDER_CHUNK_SIZE[0] + self.RENDER_CHUNK_SIZE[0] / 2
+            cz = chunk.cz * self.RENDER_CHUNK_SIZE[2] + self.RENDER_CHUNK_SIZE[2] / 2
+            dx, dz = cx - center[0], cz - center[2]
+            if dx * dx + dz * dz <= radius_squared:
+                chunk.render_shadow()
+
     def render_water(self):
         glDepthMask(GL_FALSE)
         try:

@@ -62,6 +62,7 @@ class Sheep(PassiveMob):
 
     def __init__(self, gl, wool_color=None):
         super().__init__(gl)
+        self.hp = 8
         self.sheared = False
         self.wool_color = wool_color or random.choice(NATURAL_WOOL)
         self.fur_texture = None

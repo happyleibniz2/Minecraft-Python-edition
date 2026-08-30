@@ -131,6 +131,10 @@ class RenderChunk:
         if not self.dirty:
             self.batch.draw()
 
+    def render_shadow(self):
+        if not self.dirty:
+            self.batch.draw()
+
     def render_overlay(self):
         if not self.dirty:
             self.overlay_batch.draw()

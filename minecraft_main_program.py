@@ -121,6 +121,13 @@ def show_settings():
     global mainFunction
     mainFunction = draw_settings_menu
 
+def toggle_shaders():
+    settings.set_shaders(not settings.SHADERS)
+    scene.light.set_enabled(settings.SHADERS)
+
+def toggle_player_shadows():
+    settings.set_player_shadows(not settings.PLAYER_SHADOWS)
+
 def edit_panorama():
     global mainFunction
     mainFunction = draw_panorama_menu
@@ -255,6 +262,30 @@ def draw_settings_menu(mc):
     lang_button.x = scene.WIDTH // 2 - (lang_button.button.width // 2) - 170
     lang_button.y = scene.HEIGHT // 2 - (lang_button.button.height // 2) - 30
     lang_button.update(mp, mc)
+
+    shader_button = Button(
+        scene,
+        f"Shaders: {'YES' if settings.SHADERS else 'NO'}",
+        0,
+        0,
+        text_x=scene.WIDTH // 2 - (400 // 2),
+    )
+    shader_button.setEvent(toggle_shaders)
+    shader_button.x = scene.WIDTH // 2 - (shader_button.button.width // 2) - 170
+    shader_button.y = scene.HEIGHT // 2 - (shader_button.button.height // 2) + 20
+    shader_button.update(mp, mc)
+
+    player_shadow_button = Button(
+        scene,
+        f"Player Shadows: {'YES' if settings.PLAYER_SHADOWS else 'NO'}",
+        0,
+        0,
+        text_x=scene.WIDTH // 2 - (400 // 2),
+    )
+    player_shadow_button.setEvent(toggle_player_shadows)
+    player_shadow_button.x = scene.WIDTH // 2 - (player_shadow_button.button.width // 2) - 170
+    player_shadow_button.y = scene.HEIGHT // 2 - (player_shadow_button.button.height // 2) + 70
+    player_shadow_button.update(mp, mc)
 
     sound.musicPlayer.set_volume(soundVolumeSliderBox.val / 100)
     sound.volume = soundVolumeSliderBox.val / 100
@@ -670,6 +701,8 @@ while True:
                         player.inventory.activeInventory = 8
                     if event.key == pygame.K_F3:
                         showInfoLabel = not showInfoLabel
+                    if event.key == pygame.K_b and pygame.key.get_pressed()[pygame.K_F3]:
+                        scene.show_hitboxes = not scene.show_hitboxes
                     if event.key == pygame.K_t and not IN_MENU:
                         draw_command_function()
                     if event.key == pygame.K_F5:
@@ -686,6 +719,8 @@ while True:
                         player.is_spectator = not player.is_spectator
                     if event.key == pygame.K_l:
                         player.give_debug_items()
+                    if event.key == pygame.K_q:
+                        player.dropSelectedItem(bool(event.mod & pygame.KMOD_CTRL))
                 if event.type == pygame.MOUSEBUTTONDOWN:
                     if event.button in (2, 3):
                         player.mouseEvent(event.button, dt)

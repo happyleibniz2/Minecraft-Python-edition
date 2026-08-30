@@ -1,3 +1,5 @@
+import math
+
 from game.models.Model import Model
 from functions import roundPos
 
@@ -7,6 +9,10 @@ class Entity:
         self.bInAir = None
         self.canShake = None
         self.hp = 20
+        self.is_dead = False
+        self.hurt_cooldown = 0.0
+        self.width = 0.6
+        self.height = 1.8
         self.dy = 0
         print("doing some buggy things in the Entity class...")
         self.position = [0, 100, 0]
@@ -22,10 +28,55 @@ class Entity:
         self.model = Model(gl)
 
     def update(self, dt):
+        self.tick_combat(dt)
         self.update_pos(dt)
 
     def render(self, a):
+        if self.is_dead:
+            return
         self.model.drawModel(self.position, self.rotation)
+
+    def tick_combat(self, dt):
+        self.hurt_cooldown = max(0.0, self.hurt_cooldown - dt)
+
+    def get_hitbox(self):
+        half_width = self.width / 2
+        ground = self.position[1] - 1.25
+        return (
+            self.position[0] - half_width, ground, self.position[2] - half_width,
+            self.position[0] + half_width, ground + self.height, self.position[2] + half_width,
+        )
+
+    def hurt(self, damage, attacker=None):
+        if self.is_dead or self.hurt_cooldown > 0:
+            return False
+        self.hp -= max(0.0, damage)
+        self.hurt_cooldown = 0.5
+        if attacker is not None:
+            self.knockback_from(attacker)
+        if self.hp <= 0:
+            self.die()
+        return True
+
+    def knockback_from(self, attacker, strength=0.4):
+        dx = self.position[0] - attacker.position[0]
+        dz = self.position[2] - attacker.position[2]
+        distance = math.hypot(dx, dz)
+        if distance <= 1e-6:
+            return
+        target = (
+            self.position[0] + dx / distance * strength,
+            self.position[1],
+            self.position[2] + dz / distance * strength,
+        )
+        self.position = list(self.collide(target))
+        self.dy = max(self.dy, 2.0)
+
+    def die(self):
+        self.is_dead = True
+        entities = getattr(self.gl, "entity", None)
+        if entities is not None and self in entities:
+            entities.remove(self)
 
     def update_pos(self, dt):
         DX, DY, DZ = 0, 0, 0

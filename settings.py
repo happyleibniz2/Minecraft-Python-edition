@@ -3,6 +3,7 @@ import random
 import pygame
 from pyglet import font
 import json
+import os
 
 lang_type_file = open("gui/lang.mclanguage", "r")
 lang_type = str(lang_type_file.read())
@@ -24,6 +25,38 @@ elif current_language == "en":
     mainFont = font.load('gui/main.ttf', 20)
 
 pygame.init()
+
+OPTIONS_FILE = os.path.join("gui", "options.json")
+
+
+def load_options():
+    try:
+        with open(OPTIONS_FILE, "r", encoding="utf-8") as options_file:
+            return json.load(options_file)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+
+
+def save_options():
+    with open(OPTIONS_FILE, "w", encoding="utf-8") as options_file:
+        json.dump({"shaders": SHADERS, "player_shadows": PLAYER_SHADOWS}, options_file, indent=2)
+
+
+def set_shaders(enabled):
+    global SHADERS
+    SHADERS = bool(enabled)
+    save_options()
+
+
+def set_player_shadows(enabled):
+    global PLAYER_SHADOWS
+    PLAYER_SHADOWS = bool(enabled)
+    save_options()
+
+
+_options = load_options()
+SHADERS = bool(_options.get("shaders", True))
+PLAYER_SHADOWS = bool(_options.get("player_shadows", True))
 
 monitor = pygame.display.Info()
 #WIDTH = monitor.current_w

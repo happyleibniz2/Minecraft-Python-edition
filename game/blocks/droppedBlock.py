@@ -9,12 +9,19 @@ class droppedBlock:
         self.gl = gl
         self.blocks = {}
 
-    def addBlock(self, coords, name, dr=True):
-        self.blocks[len(self.blocks)] = [coords, name, randint(0, 2) / 10, [0, "-"], 0, dr]
+    def addBlock(self, coords, name, dr=True, velocity=None, pickup_delay=0.0, count=1):
+        velocity = list(velocity or (0.0, 0.0, 0.0))
+        self.blocks[len(self.blocks)] = [
+            tuple(coords), name, randint(0, 2) / 10, [0, "-"], 0, dr,
+            velocity, float(pickup_delay), max(1, int(count)),
+        ]
 
     def update(self, dt):
         cpy = self.blocks.copy().items()
         for i in cpy:
+            entry = i[1]
+            entry[7] = max(0.0, entry[7] - dt)
+            self._update_physics(entry, dt)
             pp = list(self.gl.player.position)
             sx, sy, sz = 0.25, 0.25, 0.25
 
@@ -22,23 +29,18 @@ class droppedBlock:
             X, Y, Z = x + sx, y + sy, z + sz
             kx, ky, kz = i[1][0][0] - i[1][2], i[1][0][1] + 0.1 + i[1][3][0], i[1][0][2] + i[1][2]
 
-            br = False
-            for xs in (1, 0, -1):
-                for ys in (1, 0, -1, -2):
-                    for zs in (1, 0, -1):
-                        if roundPos((pp[0] + xs, pp[1] + ys, pp[2] + zs)) == roundPos((x + kx, y + ky, z + kz)) and \
-                                self.gl.player.hp > 0:
-                            self.blocks.pop(i[0])
-                            self.gl.blockSound.playPickUpSound()
-                            self.gl.player.inventory.addBlock(i[1][1])
-                            br = True
-                        if br:
-                            break
-                    if br:
-                        break
-                if br:
-                    break
-            if br:
+            dx = pp[0] - entry[0][0]
+            dy = pp[1] - entry[0][1]
+            dz = pp[2] - entry[0][2]
+            if (entry[7] <= 0 and dx * dx + dy * dy + dz * dz <= 2.25
+                    and self.gl.player.hp > 0):
+                leftover = self.gl.player.inventory.addBlock(entry[1], entry[8])
+                if leftover < entry[8]:
+                    self.gl.blockSound.playPickUpSound()
+                if leftover <= 0:
+                    self.blocks.pop(i[0])
+                else:
+                    entry[8] = leftover
                 continue
 
             vertexes = [
@@ -98,11 +100,29 @@ class droppedBlock:
             if i[1][3][0] > 0.1:
                 i[1][3][1] = "-"
 
-            if i[1][0][1] < -2:
+            if i[1][0][1] < -90:
                 self.blocks.pop(i[0])
                 continue
-            yy = i[1][0][1]
-            if roundPos((i[1][0][0], i[1][0][1], i[1][0][2])) not in self.gl.cubes.cubes:
-                yy -= 0.1 * dt * 60
-            self.blocks[i[0]][0] = (i[1][0][0], yy, i[1][0][2])
             self.blocks[i[0]][4] = i[1][4]
+
+    def _update_physics(self, entry, dt):
+        x, y, z = entry[0]
+        velocity = entry[6]
+        velocity[1] -= 9.8 * dt
+
+        drag = 0.98 ** (dt * 20)
+        velocity[0] *= drag
+        velocity[2] *= drag
+
+        nx = x + velocity[0] * dt
+        ny = y + velocity[1] * dt
+        nz = z + velocity[2] * dt
+
+        floor = roundPos((nx, ny - 0.05, nz))
+        if floor in self.gl.cubes.collidable and velocity[1] <= 0:
+            ny = floor[1] + 0.51
+            velocity[1] = -velocity[1] * 0.25 if abs(velocity[1]) > 0.8 else 0.0
+            velocity[0] *= 0.6
+            velocity[2] *= 0.6
+
+        entry[0] = (nx, ny, nz)

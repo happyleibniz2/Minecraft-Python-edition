@@ -17,6 +17,18 @@ TOOL_TIERS = {
 
 TOOL_KINDS = ("pickaxe", "axe", "shovel", "hoe", "sword")
 
+# Java Edition 1.20.1 attack attributes. Damage includes the player's base
+# attack damage, matching the number shown in the item tooltip.
+SWORD_DAMAGE = {
+    "wooden": 4.0,
+    "stone": 5.0,
+    "iron": 6.0,
+    "golden": 4.0,
+    "diamond": 7.0,
+    "netherite": 8.0,
+}
+SWORD_ATTACK_SPEED = 1.6
+
 # which tool each block category needs, and the level required to drop it
 PICKAXE_BLOCKS = {
     "stone": 1, "cobblestone": 1, "sandstone": 1, "brick": 1,
@@ -154,3 +166,20 @@ def can_harvest(tool, block_name):
     if kind != "pickaxe":
         return False
     return tool_level(tool) >= required_level(block_name)
+
+
+def attack_damage(item_name):
+    parsed = parse_tool(item_name)
+    if parsed is None:
+        return 1.0
+    tier, kind = parsed
+    if kind == "sword":
+        return SWORD_DAMAGE[tier]
+    return 1.0
+
+
+def attack_speed(item_name):
+    parsed = parse_tool(item_name)
+    if parsed is not None and parsed[1] == "sword":
+        return SWORD_ATTACK_SPEED
+    return 4.0

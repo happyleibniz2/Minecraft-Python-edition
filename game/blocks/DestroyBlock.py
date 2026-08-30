@@ -3,7 +3,7 @@ import os
 import pyglet
 from OpenGL.GL import *
 
-from game.Items import can_harvest, is_tool, mining_speed
+from game.Items import can_harvest, is_tool, mining_speed, parse_tool
 
 class DestroyBlock:
     BLOCK_HARDNESS = {
@@ -132,7 +132,9 @@ class DestroyBlock:
         inventory = getattr(player, "inventory", None)
         if inventory is None:
             return
-        inventory.damage_tool(inventory.activeInventory)
+        parsed = parse_tool(held)
+        amount = 2 if parsed is not None and parsed[1] == "sword" else 1
+        inventory.damage_tool(inventory.activeInventory, amount)
 
     @classmethod
     def get_break_time(cls, block_name, held=""):

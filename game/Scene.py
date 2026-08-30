@@ -17,6 +17,7 @@ from game.world.DayNightCycle import DayNightCycle
 from game.world.worldGenerator import worldGenerator
 from game.blocks.CubeHandler import CubeHandler
 import logging
+import settings as game_settings
 
 
 class Scene:
@@ -37,9 +38,12 @@ class Scene:
         self.fov = FOV
         self.updateEvents = []
         self.entity = []
+        self.show_hitboxes = False
         self.skyColor = [128, 179, 255]
         self.panorama = {}
         self.water_overlay = None
+        self.sun_texture = None
+        self.moon_texture = None
         self.in_water = False
 
         self.resetScene()
@@ -225,14 +229,17 @@ class Scene:
 
         if self.in_water:
             fog = self.cubes.get_water_color(roundPos(self.player.position), fog=True)
-            glFogfv(GL_FOG_COLOR, (GLfloat * 4)(fog[0] / 255, fog[1] / 255, fog[2] / 255, 1))
+            fog_color = (fog[0] / 255, fog[1] / 255, fog[2] / 255)
+            glFogfv(GL_FOG_COLOR, (GLfloat * 4)(*fog_color, 1))
             glFogf(GL_FOG_START, 0)
             glFogf(GL_FOG_END, 24)
+            self.light.set_environment(fog_color, 0, 24)
         else:
             fog = self.dayNight.fog_color
             glFogfv(GL_FOG_COLOR, (GLfloat * 4)(fog[0], fog[1], fog[2], 1))
             glFogf(GL_FOG_START, 10)
             glFogf(GL_FOG_END, 80)
+            self.light.set_environment(fog, 10, 80)
 
         self.set3d()
         glClearColor(self.skyColor[0] / 255, self.skyColor[1] / 255, self.skyColor[2] / 255, 1)
@@ -247,7 +254,7 @@ class Scene:
         for i in self.entity:
             i.update(dt)
 
-        self.light.update()
+        self.light.update(dt)
 
         blockByVec = self.cubes.hitTest(self.player.position, self.player.get_sight_vector())
         if blockByVec[0]:
@@ -263,21 +270,24 @@ class Scene:
             self.lookingAt = "Nothing"
 
         glColor3d(1, 1, 1)
+        self.draw(dt)
 
-        self.set2d()
+        # UI must be last: drawing modal windows before the 3D pass allowed
+        # the sun, moon and world to overwrite inventory/menu pixels.
         self.blockSound.pickUpAlreadyPlayed = False
 
-        for i in self.updateEvents:
+        for i in self.updateEvents[:]:
             i()
-
-        self.draw(dt)
 
     def draw(self, dt=0.0):
         self.set3d()
         glLoadIdentity()
         self.player.updateView()
 
+        self.drawAtmosphereSky()
         self.drawCelestialSky()
+        self.clouds.render(self.player, self.dayNight)
+        self.renderShadowMap()
         self.light.begin_render()
         try:
             self.cubes.render(self.player.position)
@@ -295,6 +305,9 @@ class Scene:
         finally:
             self.light.end_render()
         self.stuffBatch = pyglet.graphics.Batch()
+
+        if self.show_hitboxes:
+            self.drawEntityHitboxes()
 
         self.set2d()
         if self.in_water:
@@ -323,22 +336,92 @@ class Scene:
                     glVertex3f(px + sx * radius, py + sy * radius, pz + sz * radius)
                 glEnd()
 
-            sun_x = math.cos(sun_angle) * radius
-            sun_y = math.sin(sun_angle) * radius
-            glPointSize(30)
-            glColor4f(1.0, 0.88, 0.42, 1.0)
-            glBegin(GL_POINTS)
-            glVertex3f(px + sun_x, py + sun_y, pz - radius * 0.25)
-            glEnd()
+                glPointSize(1.2)
+                glBegin(GL_POINTS)
+                for sx, sy, sz, intensity, blue in self.dayNight.galaxy_stars:
+                    alpha = brightness * intensity
+                    glColor4f(alpha * 0.72, alpha * 0.78, alpha * blue, alpha)
+                    glVertex3f(px + sx * radius, py + sy * radius, pz + sz * radius)
+                glEnd()
 
-            glPointSize(22)
-            glColor4f(0.72, 0.78, 0.92, 1.0)
-            glBegin(GL_POINTS)
-            glVertex3f(px - sun_x, py - sun_y, pz + radius * 0.25)
-            glEnd()
+            glEnable(GL_TEXTURE_2D)
+            glEnable(GL_BLEND)
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+            glColor4f(1, 1, 1, 1)
+            glPushMatrix()
+            glTranslatef(px, py, pz)
+            glRotatef(math.degrees(sun_angle) - 90, 1, 0, 0)
+
+            if self.sun_texture is not None:
+                self._drawCelestialQuad(self.sun_texture, radius, 8.0, (0, 0, 1, 1))
+
+            if self.moon_texture is not None:
+                phase = self.dayNight.moon_phase
+                column, row = phase % 4, phase // 4
+                u0, u1 = column / 4, (column + 1) / 4
+                v1, v0 = 1 - row / 2, 1 - (row + 1) / 2
+                self._drawCelestialQuad(self.moon_texture, -radius, 6.0, (u0, v0, u1, v1))
+
+            glPopMatrix()
         finally:
             glDepthMask(GL_TRUE)
             glPopAttrib()
+
+    def drawAtmosphereSky(self):
+        """Draw a smooth horizon-to-zenith atmospheric gradient dome."""
+        px, py, pz = self.player.position
+        radius = 90.0
+        rings = 10
+        segments = 40
+        horizon = self.dayNight.horizon_color
+        zenith = self.dayNight.zenith_color
+
+        glPushAttrib(GL_ENABLE_BIT | GL_DEPTH_BUFFER_BIT | GL_CURRENT_BIT)
+        try:
+            glDisable(GL_TEXTURE_2D)
+            glDisable(GL_FOG)
+            glDisable(GL_DEPTH_TEST)
+            glDisable(GL_BLEND)
+            glDepthMask(GL_FALSE)
+            glPushMatrix()
+            glTranslatef(px, py, pz)
+
+            for ring in range(rings):
+                t0 = ring / rings
+                t1 = (ring + 1) / rings
+                angle0 = t0 * math.pi / 2
+                angle1 = t1 * math.pi / 2
+                y0, y1 = math.sin(angle0) * radius, math.sin(angle1) * radius
+                r0, r1 = math.cos(angle0) * radius, math.cos(angle1) * radius
+                color0 = tuple(horizon[i] + (zenith[i] - horizon[i]) * t0 for i in range(3))
+                color1 = tuple(horizon[i] + (zenith[i] - horizon[i]) * t1 for i in range(3))
+
+                glBegin(GL_QUAD_STRIP)
+                for segment in range(segments + 1):
+                    angle = segment / segments * math.tau
+                    cosine, sine = math.cos(angle), math.sin(angle)
+                    glColor3f(*color0)
+                    glVertex3f(cosine * r0, y0, sine * r0)
+                    glColor3f(*color1)
+                    glVertex3f(cosine * r1, y1, sine * r1)
+                glEnd()
+
+            glPopMatrix()
+        finally:
+            glDepthMask(GL_TRUE)
+            glPopAttrib()
+
+    @staticmethod
+    def _drawCelestialQuad(texture_group, height, size, uv):
+        u0, v0, u1, v1 = uv
+        texture_group.set_state_recursive()
+        glBegin(GL_QUADS)
+        glTexCoord2f(u0, v0); glVertex3f(-size, height, -size)
+        glTexCoord2f(u1, v0); glVertex3f(size, height, -size)
+        glTexCoord2f(u1, v1); glVertex3f(size, height, size)
+        glTexCoord2f(u0, v1); glVertex3f(-size, height, size)
+        glEnd()
+        texture_group.unset_state_recursive()
 
     def drawWaterOverlay(self):
         texture_group = getattr(self, "water_overlay", None)
@@ -362,6 +445,93 @@ class Scene:
         finally:
             glPopAttrib()
 
+    def drawEntityHitboxes(self):
+        """Minecraft F3+B-style entity AABBs and facing vectors."""
+        glPushAttrib(GL_ENABLE_BIT | GL_CURRENT_BIT | GL_LINE_BIT | GL_DEPTH_BUFFER_BIT)
+        try:
+            glDisable(GL_TEXTURE_2D)
+            glDisable(GL_BLEND)
+            glLineWidth(2)
+            for entity in self.entity:
+                if getattr(entity, "is_dead", False):
+                    continue
+                x0, y0, z0, x1, y1, z1 = entity.get_hitbox()
+                corners = (
+                    (x0, y0, z0), (x1, y0, z0), (x1, y0, z1), (x0, y0, z1),
+                    (x0, y1, z0), (x1, y1, z0), (x1, y1, z1), (x0, y1, z1),
+                )
+                edges = (
+                    (0, 1), (1, 2), (2, 3), (3, 0),
+                    (4, 5), (5, 6), (6, 7), (7, 4),
+                    (0, 4), (1, 5), (2, 6), (3, 7),
+                )
+                glColor3f(1, 1, 1)
+                glBegin(GL_LINES)
+                for start, end in edges:
+                    glVertex3f(*corners[start])
+                    glVertex3f(*corners[end])
+                glEnd()
+
+                yaw = math.radians(entity.rotation[1])
+                center_y = (y0 + y1) / 2
+                glColor3f(0.1, 0.4, 1.0)
+                glBegin(GL_LINES)
+                glVertex3f(entity.position[0], center_y, entity.position[2])
+                glVertex3f(entity.position[0] + math.sin(yaw), center_y,
+                           entity.position[2] + math.cos(yaw))
+                glEnd()
+        finally:
+            glPopAttrib()
+
+    def renderShadowMap(self):
+        """Render terrain, entities and block entities from the moving light."""
+        if not self.light.begin_shadow_pass(self.player.position, self.dayNight.light_direction):
+            return
+        try:
+            self.cubes.render_shadow(self.player.position, self.light.SHADOW_RADIUS * 1.5)
+
+            for entity in self.entity:
+                if not getattr(entity, "is_dead", False):
+                    entity.render(0)
+
+            # At this point the dynamic batch contains dropped/block entities;
+            # particles are added later and clouds have their own renderer.
+            try:
+                self.stuffBatch.draw()
+            except pyglet.gl.lib.GLException:
+                logging.exception("Block entity shadow pass failed")
+
+            if game_settings.PLAYER_SHADOWS and not self.player.is_spectator:
+                self.drawPlayerShadowCaster()
+        finally:
+            self.light.end_shadow_pass()
+
+    def drawPlayerShadowCaster(self):
+        """Simple player-sized depth proxy used only by the shadow map."""
+        x, y, z = self.player.position
+        x0, x1 = x - 0.3, x + 0.3
+        y0, y1 = y - 1.25, y + 0.55
+        z0, z1 = z - 0.3, z + 0.3
+        vertices = (
+            (x0, y0, z0), (x1, y0, z0), (x1, y1, z0), (x0, y1, z0),
+            (x0, y0, z1), (x1, y0, z1), (x1, y1, z1), (x0, y1, z1),
+        )
+        faces = (
+            (0, 1, 2, 3), (5, 4, 7, 6), (4, 0, 3, 7),
+            (1, 5, 6, 2), (4, 5, 1, 0), (3, 2, 6, 7),
+        )
+        glPushAttrib(GL_ENABLE_BIT)
+        try:
+            glDisable(GL_TEXTURE_2D)
+            glDisable(GL_ALPHA_TEST)
+            glBegin(GL_QUADS)
+            for face in faces:
+                for index in face:
+                    glVertex3f(*vertices[index])
+            glEnd()
+        finally:
+            glPopAttrib()
+
     def entity_types(self):
         """All spawnable entity types, keyed by entity id."""
         from game.entity.Cow import Cow
@@ -369,6 +539,51 @@ class Scene:
         from game.entity.Zombie import Zombie
 
         return {"cow": Cow, "sheep": Sheep, "zombie": Zombie}
+
+    def hitTestEntity(self, origin, direction, max_distance=3.0):
+        """Return the closest visible entity under the crosshair."""
+        length = math.sqrt(sum(component * component for component in direction))
+        if length <= 1e-9:
+            return None
+        ray = tuple(component / length for component in direction)
+
+        block, _ = self.cubes.hitTest(origin, ray, dist=math.ceil(max_distance))
+        block_distance = max_distance
+        if block is not None:
+            offset = tuple(block[i] - origin[i] for i in range(3))
+            block_distance = max(0.0, sum(offset[i] * ray[i] for i in range(3)) - 0.5)
+
+        closest = None
+        closest_distance = block_distance
+        for entity in self.entity[:]:
+            if getattr(entity, "is_dead", False):
+                continue
+            distance = self._rayAabbDistance(origin, ray, entity.get_hitbox())
+            if distance is not None and distance <= closest_distance:
+                closest = entity
+                closest_distance = distance
+        return closest
+
+    @staticmethod
+    def _rayAabbDistance(origin, direction, bounds):
+        minimum = bounds[:3]
+        maximum = bounds[3:]
+        near, far = 0.0, float("inf")
+        for axis in range(3):
+            if abs(direction[axis]) < 1e-9:
+                if origin[axis] < minimum[axis] or origin[axis] > maximum[axis]:
+                    return None
+                continue
+            inverse = 1.0 / direction[axis]
+            first = (minimum[axis] - origin[axis]) * inverse
+            second = (maximum[axis] - origin[axis]) * inverse
+            if first > second:
+                first, second = second, first
+            near = max(near, first)
+            far = min(far, second)
+            if near > far:
+                return None
+        return near
 
     def spawn_entity(self, factory, label, position=None):
         """Spawn an entity near the player, like Minecraft's spawn eggs."""

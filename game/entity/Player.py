@@ -5,7 +5,7 @@ from OpenGL.GL import *
 from game.blocks.BlockEvent import *
 from functions import roundPos
 from game.blocks.DestroyBlock import DestroyBlock
-from game.Items import is_item
+from game.Items import attack_damage, attack_speed, is_item, is_tool
 from settings import *
 
 class Player:
@@ -35,6 +35,7 @@ class Player:
         self.mouse_sensitivity = MOUSE_SENSITIVITY
         self._mouse_dx = 0.0
         self._mouse_dy = 0.0
+        self.attack_cooldown = 999.0
         self.hp = -1
         self.bInAir = False
         self.playerDead = False
@@ -80,6 +81,7 @@ class Player:
             self.shift = max(target, self.shift - step)
 
     def updatePosition(self, dt):
+        self.attack_cooldown += max(0.0, dt)
         if not self.gl.allowEvents["movePlayer"]:
             self.clear_look()
             self.is_sprinting = False
@@ -208,6 +210,33 @@ class Player:
         for item in items:
             self.inventory.addBlock(item)
 
+    def dropSelectedItem(self, drop_stack=False):
+        """Throw one item with Q, or the whole stack with Ctrl+Q."""
+        slot = self.inventory.activeInventory
+        stack = self.inventory.inventory.get(slot, ["", 0])
+        if not stack[0] or stack[1] <= 0:
+            return False
+
+        count = stack[1] if drop_stack else 1
+        sight = self.get_sight_vector()
+        origin = (
+            self.position[0] + sight[0] * 0.7,
+            self.position[1] - 0.35 + sight[1] * 0.7,
+            self.position[2] + sight[2] * 0.7,
+        )
+        velocity = (
+            sight[0] * 5.0,
+            1.5 + sight[1] * 5.0,
+            sight[2] * 5.0,
+        )
+        self.gl.droppedBlock.addBlock(
+            origin, stack[0], velocity=velocity, pickup_delay=1.0, count=count,
+        )
+
+        remaining = stack[1] - count
+        self.inventory.inventory[slot] = [stack[0], remaining] if remaining > 0 else ["", 0]
+        return True
+
     def _has_support(self, x, y, z):
         support_y = round(y - 1.75)
         if abs(y - (support_y + 1.75)) > 0.1:
@@ -322,10 +351,20 @@ class Player:
         self.inventory.clearCraftingSlots()
 
     def mouseEvent(self, button, dt):
-        blockByVec = self.gl.cubes.hitTest(self.position, self.get_sight_vector())
+        sight = self.get_sight_vector()
+        blockByVec = self.gl.cubes.hitTest(self.position, sight)
 
-        if button == 1 and blockByVec[0]:
-            self.gl.destroy.destroy(self.gl.cubes.cubes[blockByVec[0]].name, blockByVec, dt)
+        if button == 1:
+            hit_test = getattr(self.gl, "hitTestEntity", None)
+            entity = hit_test(self.position, sight, 3.0) if hit_test else None
+            if entity is not None:
+                self.gl.destroy.destroyStage = -1
+                self.attackEntity(entity)
+                return
+            if blockByVec[0]:
+                self.gl.destroy.destroy(self.gl.cubes.cubes[blockByVec[0]].name, blockByVec, dt)
+            else:
+                self.gl.destroy.destroyStage = -1
         else:
             self.gl.destroy.destroyStage = -1
 
@@ -391,6 +430,22 @@ class Player:
                     if placed:
                         self.gl.blockSound.playBlockSound(self.gl.cubes.cubes[blockByVec].name)
                         self.inventory.inventory[self.inventory.activeInventory][1] -= 1
+
+    def attackEntity(self, entity):
+        """Perform a full-strength Minecraft melee attack when cooled down."""
+        if self.is_spectator or self.playerDead or entity is None:
+            return False
+        stack = self.inventory.inventory.get(self.inventory.activeInventory, ["", 0])
+        held = stack[0] if stack[1] else ""
+        cooldown = 1.0 / attack_speed(held)
+        if self.attack_cooldown < cooldown:
+            return False
+
+        self.attack_cooldown = 0.0
+        damaged = entity.hurt(attack_damage(held), self)
+        if damaged and is_tool(held):
+            self.inventory.damage_tool(self.inventory.activeInventory, 1)
+        return damaged
 
     def collide(self, pos):
         # spectators are immune to all damage, exactly like Minecraft

@@ -24,8 +24,9 @@ class PassiveMob(Entity):
     # ``position`` is the entity's eye/centre and the physics puts the ground
     # 1.75 blocks below it (see ``_has_support``). Model space is Y-down with
     # vanilla feet at model y=24. At 1/16 scale that already lowers them 1.5
-    # blocks, so the root only needs another 0.25-block offset to meet ground.
-    GROUND_OFFSET = -0.25
+    # blocks. Blocks are centered on integer Y and their top surface is +0.5,
+    # so the root sits 0.25 blocks above position.y to put feet on that top.
+    GROUND_OFFSET = 0.25
     MODEL_OFFSET = 0.0
 
     WANDER_SPEED = 0.7          # blocks/second, Minecraft passive mob speed
@@ -40,6 +41,8 @@ class PassiveMob(Entity):
         super().__init__(gl)
         self.speed = self.WANDER_SPEED
         self.hp = 10
+        self.width = 0.9
+        self.height = 1.4
 
         self.target = None
         self.idle_timer = random.uniform(*self.IDLE_TIME)
@@ -82,8 +85,10 @@ class PassiveMob(Entity):
 
     # ------------------------------------------------------------------- AI
     def update(self, dt):
-        if dt <= 0:
+        if self.is_dead or dt <= 0:
             return
+
+        self.tick_combat(dt)
 
         self.jump_cooldown = max(0.0, self.jump_cooldown - dt)
         self._update_ai(dt)
@@ -206,7 +211,7 @@ class PassiveMob(Entity):
 
     # -------------------------------------------------------------- render
     def render(self, a):
-        if not self.has_texture:
+        if self.is_dead or not self.has_texture:
             return
 
         glEnable(GL_TEXTURE_2D)

@@ -43,6 +43,9 @@ class Zombie(Entity):
         self.jump_cooldown = 0
 
     def update(self, dt):
+        if self.is_dead:
+            return
+        self.tick_combat(dt)
         self.time += dt * 10
         self.jump_cooldown = max(0, self.jump_cooldown - dt)
 
@@ -86,6 +89,8 @@ class Zombie(Entity):
         return self.collide((x, probe_y, z))[1] > probe_y + 1e-5
 
     def render(self, a):
+        if self.is_dead:
+            return
         glEnable(GL_TEXTURE_2D)
         if self.has_texture:
             glBindTexture(GL_TEXTURE_2D, self.tex_id)

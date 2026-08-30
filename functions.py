@@ -75,6 +75,9 @@ def load_textures(self):
     from game.entity.SpawnEggs import configure_spawn_eggs
     configure_spawn_eggs(self)
 
+    from game.world.DayNightCycle import configure_celestial_textures
+    configure_celestial_textures(self)
+
 
 def configure_grass_textures(self):
     """Wire up the Minecraft 1.20.1 three-texture grass block.
