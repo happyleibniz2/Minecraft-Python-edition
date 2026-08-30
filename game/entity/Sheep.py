@@ -11,7 +11,8 @@ inflated copy drawn over the body:
     body box (-4, -10, -7) size 8x16x6 grow 1.75 uv (28, 8)
     legs box (-2, 0, -2) size 4x6x4 grow 0.5 uv (0, 16)
 
-The model is drawn in a Y-down space, so vanilla Y values are negated.
+The renderer flips vanilla's Y-down model space once at the root, so vanilla
+pivot values are used unchanged.
 """
 
 import os
@@ -44,20 +45,20 @@ class Sheep(PassiveMob):
     FUR_TEXTURE_PATH = os.path.join("textures", "mobs", "sheep", "sheep_fur.png")
     TEXTURE_SIZE = (64, 32)
 
-    HEAD = (-3, -4, -6, 6, 6, 8, 0, -6, -8, 0, 0)
-    BODY = (-4, -10, -7, 8, 16, 6, 0, -5, 2, 28, 8)
-    LEG_FRONT_RIGHT = (-2, 0, -2, 4, 12, 4, -3, -12, -7, 0, 16)
-    LEG_FRONT_LEFT = (-2, 0, -2, 4, 12, 4, 3, -12, -7, 0, 16)
-    LEG_BACK_RIGHT = (-2, 0, -2, 4, 12, 4, -3, -12, 7, 0, 16)
-    LEG_BACK_LEFT = (-2, 0, -2, 4, 12, 4, 3, -12, 7, 0, 16)
+    HEAD = (-3, -4, -6, 6, 6, 8, 0, 6, -8, 0, 0)
+    BODY = (-4, -10, -7, 8, 16, 6, 0, 5, 2, 28, 8)
+    LEG_FRONT_RIGHT = (-2, 0, -2, 4, 12, 4, -3, 12, -5, 0, 16)
+    LEG_FRONT_LEFT = (-2, 0, -2, 4, 12, 4, 3, 12, -5, 0, 16)
+    LEG_BACK_RIGHT = (-2, 0, -2, 4, 12, 4, -3, 12, 7, 0, 16)
+    LEG_BACK_LEFT = (-2, 0, -2, 4, 12, 4, 3, 12, 7, 0, 16)
 
     # fur layer: same pivots, inflated boxes
-    FUR_HEAD = (-3.6, -4.6, -4.6, 7.2, 7.2, 7.2, 0, -6, -8, 0, 0)
-    FUR_BODY = (-5.75, -11.75, -8.75, 11.5, 19.5, 9.5, 0, -5, 2, 28, 8)
-    FUR_LEG_FRONT_RIGHT = (-2.5, 0, -2.5, 5, 6.5, 5, -3, -12, -7, 0, 16)
-    FUR_LEG_FRONT_LEFT = (-2.5, 0, -2.5, 5, 6.5, 5, 3, -12, -7, 0, 16)
-    FUR_LEG_BACK_RIGHT = (-2.5, 0, -2.5, 5, 6.5, 5, -3, -12, 7, 0, 16)
-    FUR_LEG_BACK_LEFT = (-2.5, 0, -2.5, 5, 6.5, 5, 3, -12, 7, 0, 16)
+    FUR_HEAD = (-3.6, -4.6, -4.6, 7.2, 7.2, 7.2, 0, 6, -8, 0, 0)
+    FUR_BODY = (-5.75, -11.75, -8.75, 11.5, 19.5, 9.5, 0, 5, 2, 28, 8)
+    FUR_LEG_FRONT_RIGHT = (-2.5, -0.5, -2.5, 5, 7, 5, -3, 12, -5, 0, 16)
+    FUR_LEG_FRONT_LEFT = (-2.5, -0.5, -2.5, 5, 7, 5, 3, 12, -5, 0, 16)
+    FUR_LEG_BACK_RIGHT = (-2.5, -0.5, -2.5, 5, 7, 5, -3, 12, 7, 0, 16)
+    FUR_LEG_BACK_LEFT = (-2.5, -0.5, -2.5, 5, 7, 5, 3, 12, 7, 0, 16)
 
     def __init__(self, gl, wool_color=None):
         super().__init__(gl)

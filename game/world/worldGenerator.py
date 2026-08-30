@@ -26,12 +26,14 @@ class worldGenerator:
         self.start = len(self.queue)
         self.blocks = {}
         self.loading = deque()
+        self._biome_cache = {}
 
     def add(self, p, t):
-        if p in self.blocks:
-            return
-        self.blocks[p] = t
-        self.loading.append((p, t))
+        # one dict lookup instead of a membership test plus an insert
+        blocks = self.blocks
+        if blocks.get(p) is None:
+            blocks[p] = t
+            self.loading.append((p, t))
 
     def genChunk(self, player, max_chunks_per_call=8, max_blocks_per_call=256):
         if player.hp == -1:
@@ -51,60 +53,89 @@ class worldGenerator:
                 self.gl.cubes.add(p, t)
             block_budget -= 1
 
+    def _biome_data(self, biome_name):
+        """Cache the per-biome constants; they never change per column."""
+        data = self._biome_cache.get(biome_name)
+        if data is None:
+            biome = Biomes(biome_name)
+            data = (
+                biome,
+                biome.getBiomeGrass(),
+                biome.getBiomeDirt(),
+                biome.getBiomeStone(),
+                50 if biome_name in ("forest", "taiga") else 70,
+                biome_name == "ocean",
+                biome_name in ("forest", "taiga"),
+            )
+            self._biome_cache[biome_name] = data
+        return data
+
     def gen(self, xx, zz):
         sy = CHUNK_SIZE[1]
         oldY = 0
 
+        # hoist attribute lookups out of the per-block loops
+        add = self.add
+        randint = random.randint
+        gen_ore = self.genOre
+        world_perlin = self.worldPerlin
+        biome_perlin = self.perlinBiomes
+        sea_level = self.SEA_LEVEL
+        ore_depth = sy - 20
+        first_spawn = self.gl.startPlayerPos == [0, -9000, 0]
+
         for x in range(xx, xx + CHUNK_SIZE[0]):
             for z in range(zz, zz + CHUNK_SIZE[2]):
-                y = self.worldPerlin(x, z)
-                biomePerlin = self.perlinBiomes(x, z) * 3
-                activeBiome = Biomes(getBiomeByTemp(biomePerlin))
-                if activeBiome.biome == "mountains":
+                y = world_perlin(x, z)
+                biome_name = getBiomeByTemp(biome_perlin(x, z) * 3)
+                (activeBiome, grass, dirt, stone,
+                 ch, is_ocean, is_woodland) = self._biome_data(biome_name)
+
+                if biome_name == "mountains":
                     if -3 < oldY - y < 3:
                         y = int((oldY + y) / 2)
-                if activeBiome.biome == "big_mountains":
+                elif biome_name == "big_mountains":
                     if -3 < oldY - y < 3:
                         y *= 2
                         y = int((oldY + y) / 2)
                 oldY = y
                 y += sy
-                is_ocean = activeBiome.biome == "ocean"
                 if is_ocean:
-                    y = min(y, self.SEA_LEVEL - 3)
-                ch = 70
-                if activeBiome.biome in ["forest", "taiga"]:
-                    ch = 50
+                    y = min(y, sea_level - 3)
 
-                spawnTree = random.randint(0, ch) == 20 and y > sy - 5 and not is_ocean
+                spawnTree = randint(0, ch) == 20 and y > sy - 5 and not is_ocean
 
-                surface = activeBiome.getBiomeGrass()
-                if is_ocean:
-                    surface = activeBiome.getBiomeStone()
-                self.add((x, y, z), surface)
+                add((x, y, z), stone if is_ocean else grass)
 
                 if is_ocean:
-                    for water_y in range(y + 1, self.SEA_LEVEL + 1):
-                        self.add((x, water_y, z), "water")
-                elif self.gl.startPlayerPos == [0, -9000, 0] and not spawnTree:
+                    for water_y in range(y + 1, sea_level + 1):
+                        add((x, water_y, z), "water")
+                elif first_spawn and not spawnTree:
                     self.gl.startPlayerPos = [x, y + 2, z]
                     self.gl.player.position = [x, y + 2, z]
                     self.gl.player.lastPlayerPosOnGround = [x, y + 2, z]
+                    first_spawn = False
 
-                if spawnTree and activeBiome.biome in ["forest", "taiga"]:
+                if spawnTree and is_woodland:
                     self.spawnTree(x, y, z)
 
-                self.add((x, 0, z), "bedrock")
+                add((x, 0, z), "bedrock")
+
+                # the per-block randint is deliberate: it gives the dirt/stone
+                # boundary its ragged look, so it must stay per block
                 for i in range(1, y):
-                    if i > y - random.randint(5, 10):
-                        self.add((x, i, z), activeBiome.getBiomeDirt())
-                    else:
-                        self.add((x, i, z), activeBiome.getBiomeStone())
-                    if i < sy - 20:
-                        self.genOre(x, i, z)
+                    add((x, i, z), dirt if i > y - randint(5, 10) else stone)
+                    if i < ore_depth:
+                        gen_ore(x, i, z)
+
+    # probability that ``randint(0, 5753) == randint(0, 1575)``: for each of the
+    # 1576 shared values both draws must agree, so p = 1576 / (5754 * 1576)
+    ORE_CHANCE = 1.0 / 5754
 
     def genOre(self, x, y, z):
-        if random.randint(0, 5753) != random.randint(0, 1575):
+        # the original drew two randints per block and discarded almost all of
+        # them; one cheap random() reproduces the same rate far faster
+        if random.random() >= self.ORE_CHANCE:
             return
         r1 = random.randint(-1, 2)
         r2 = random.randint(0, 2)

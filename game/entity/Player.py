@@ -196,7 +196,7 @@ class Player:
     def give_debug_items(self):
         items = [
             "grass", "stone", "log_birch", "cactus", "water_bucket",
-            "crafting_table", "debug", "ancient_debris", "tnt", "log_oak",
+            "crafting_table", "debug", "ancient_debris", "tnt", "log_oak", "torch",
         ]
         # every wooden tool that has a texture loaded
         items += [name for name in (
@@ -387,9 +387,10 @@ class Player:
                 if held_name in self.gl.block and not is_item(held_name) and \
                         self.inventory.inventory[self.inventory.activeInventory][1] and blockByVec != playerPos and \
                         blockByVec != playerPos2:
-                    self.gl.cubes.add(blockByVec, self.inventory.inventory[self.inventory.activeInventory][0], now=True)
-                    self.gl.blockSound.playBlockSound(self.gl.cubes.cubes[blockByVec].name)
-                    self.inventory.inventory[self.inventory.activeInventory][1] -= 1
+                    placed = self.gl.cubes.add(blockByVec, held_name, now=True)
+                    if placed:
+                        self.gl.blockSound.playBlockSound(self.gl.cubes.cubes[blockByVec].name)
+                        self.inventory.inventory[self.inventory.activeInventory][1] -= 1
 
     def collide(self, pos):
         # spectators are immune to all damage, exactly like Minecraft

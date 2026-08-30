@@ -1,4 +1,5 @@
 import gc
+import math
 import threading
 import pyglet.image
 from OpenGL.GLU import *
@@ -12,6 +13,7 @@ from game.blocks.droppedBlock import droppedBlock
 from game.entity.Inventory import Inventory
 from game.entity.Zombie import Zombie
 from game.world.Clouds import Clouds
+from game.world.DayNightCycle import DayNightCycle
 from game.world.worldGenerator import worldGenerator
 from game.blocks.CubeHandler import CubeHandler
 import logging
@@ -56,6 +58,7 @@ class Scene:
         self.particles = Particles(self)
         self.destroy = DestroyBlock(self)
         self.light = Light(self)
+        self.dayNight = DayNightCycle()
 
         self.drawCounter = 0
         self.genTime = 1
@@ -109,7 +112,8 @@ class Scene:
         glDepthFunc(GL_LESS)
         glShadeModel(GL_SMOOTH)
         glDepthFunc(GL_LEQUAL)
-        glAlphaFunc(GL_GEQUAL, 1)
+        glEnable(GL_ALPHA_TEST)
+        glAlphaFunc(GL_GREATER, 0.1)
         glEnable(GL_BLEND)
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
         glEnable(GL_FOG)
@@ -128,9 +132,10 @@ class Scene:
             None,
             self.block,
             None,
-            ('leaves_taiga', 'leaves_oak', 'tall_grass', 'nocolor', 'sapling'),
+            ('leaves_taiga', 'leaves_oak', 'tall_grass', 'nocolor', 'sapling', 'torch'),
             self
         )
+        self.light.initialize()
 
         self.zombie = Zombie(self)
         self.zombie.position = [0, 100, 0]
@@ -210,6 +215,10 @@ class Scene:
     def updateScene(self, dt):
         self.genWorld()
 
+        self.dayNight.update(dt)
+        self.light.set_sky_brightness(self.dayNight.sky_brightness)
+        self.skyColor = [round(component * 255) for component in self.dayNight.sky_color]
+
         self.cubes.update_fluids(dt)
         self.cubes.rebuild_dirty_chunks(self.player.position)
         self.in_water = roundPos(self.player.position) in self.cubes.fluids
@@ -220,7 +229,8 @@ class Scene:
             glFogf(GL_FOG_START, 0)
             glFogf(GL_FOG_END, 24)
         else:
-            glFogfv(GL_FOG_COLOR, (GLfloat * 4)(0.5, 0.7, 1, 1))
+            fog = self.dayNight.fog_color
+            glFogfv(GL_FOG_COLOR, (GLfloat * 4)(fog[0], fog[1], fog[2], 1))
             glFogf(GL_FOG_START, 10)
             glFogf(GL_FOG_END, 80)
 
@@ -267,23 +277,68 @@ class Scene:
         glLoadIdentity()
         self.player.updateView()
 
-        self.cubes.render(self.player.position)
-
-        for i in self.entity:
-            i.render(dt)
-
-        self.cubes.render_water()
-        self.particles.drawParticles(dt)
-
+        self.drawCelestialSky()
+        self.light.begin_render()
         try:
-            self.stuffBatch.draw()
-        except pyglet.gl.lib.GLException:
-            logging.exception("GL batch draw failed while rendering scene")
+            self.cubes.render(self.player.position)
+
+            for i in self.entity:
+                i.render(dt)
+
+            self.cubes.render_water()
+            self.particles.drawParticles(dt)
+
+            try:
+                self.stuffBatch.draw()
+            except pyglet.gl.lib.GLException:
+                logging.exception("GL batch draw failed while rendering scene")
+        finally:
+            self.light.end_render()
         self.stuffBatch = pyglet.graphics.Batch()
 
         self.set2d()
         if self.in_water:
             self.drawWaterOverlay()
+
+    def drawCelestialSky(self):
+        """Draw the moving sun, moon and night stars behind the world."""
+        px, py, pz = self.player.position
+        radius = 80
+        sun_angle = self.dayNight.sun_angle
+
+        glPushAttrib(GL_ENABLE_BIT | GL_DEPTH_BUFFER_BIT | GL_CURRENT_BIT | GL_POINT_BIT)
+        try:
+            glDisable(GL_TEXTURE_2D)
+            glDisable(GL_FOG)
+            glDisable(GL_DEPTH_TEST)
+            glDepthMask(GL_FALSE)
+            glEnable(GL_POINT_SMOOTH)
+
+            if self.dayNight.star_brightness > 0:
+                glPointSize(1.6)
+                brightness = self.dayNight.star_brightness
+                glColor4f(brightness, brightness, brightness, brightness)
+                glBegin(GL_POINTS)
+                for sx, sy, sz in self.dayNight.stars:
+                    glVertex3f(px + sx * radius, py + sy * radius, pz + sz * radius)
+                glEnd()
+
+            sun_x = math.cos(sun_angle) * radius
+            sun_y = math.sin(sun_angle) * radius
+            glPointSize(30)
+            glColor4f(1.0, 0.88, 0.42, 1.0)
+            glBegin(GL_POINTS)
+            glVertex3f(px + sun_x, py + sun_y, pz - radius * 0.25)
+            glEnd()
+
+            glPointSize(22)
+            glColor4f(0.72, 0.78, 0.92, 1.0)
+            glBegin(GL_POINTS)
+            glVertex3f(px - sun_x, py - sun_y, pz + radius * 0.25)
+            glEnd()
+        finally:
+            glDepthMask(GL_TRUE)
+            glPopAttrib()
 
     def drawWaterOverlay(self):
         texture_group = getattr(self, "water_overlay", None)

@@ -39,6 +39,9 @@ class RenderChunk:
 
         # We'll batch faces per cube
         for pos, cube in self.cubes.items():
+            if cube.name == "torch":
+                self._add_torch(cube, handler)
+                continue
             x, y, z = pos
             vertices = None
             for dx, dy, dz, fi in self.FACE_DIRECTIONS:
@@ -80,10 +83,13 @@ class RenderChunk:
             if tinted is not None:
                 clr = tinted
 
+        tex_coords = (('t2f', (0, 0, 1, 0, 1, 1, 0, 1))
+                      if cube.name == "water"
+                      else handler.get_light_coordinates(face_vertices))
         batch = self.water_batch if cube.name == "water" else self.batch
         batch.add(4, GL_QUADS, tex_group,
                   ('v3f', face_vertices),
-                  ('t2f', (0,0, 1,0, 1,1, 0,1)),
+                  tex_coords,
                   clr)
 
         if cube.name == "water":
@@ -95,8 +101,31 @@ class RenderChunk:
             overlay_group, overlay_color = overlay
             self.overlay_batch.add(4, GL_QUADS, overlay_group,
                                    ('v3f', face_vertices),
-                                   ('t2f', (0,0, 1,0, 1,1, 0,1)),
+                                   handler.get_light_coordinates(face_vertices),
                                    overlay_color)
+
+    def _add_torch(self, cube, handler):
+        """Render a standing torch as two crossed transparent planes."""
+        x, y, z = cube.p
+        bottom = y - 0.5
+        top = bottom + 0.625
+        half_width = 0.32
+        quads = (
+            (x - half_width, bottom, z - half_width,
+             x + half_width, bottom, z + half_width,
+             x + half_width, top, z + half_width,
+             x - half_width, top, z - half_width),
+            (x - half_width, bottom, z + half_width,
+             x + half_width, bottom, z - half_width,
+             x + half_width, top, z - half_width,
+             x - half_width, top, z + half_width),
+        )
+        texture = handler.get_face_texture(cube, 3)
+        for vertices in quads:
+            self.batch.add(4, GL_QUADS, texture,
+                           ('v3f', vertices),
+                           handler.get_light_coordinates(vertices),
+                           handler.top_color)
 
     def render_opaque(self):
         if not self.dirty:

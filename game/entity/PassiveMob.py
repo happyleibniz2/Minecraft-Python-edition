@@ -21,6 +21,11 @@ class PassiveMob(Entity):
     TEXTURE_SIZE = (64, 32)
     PARTS = ()
     MODEL_SCALE = 0.0625
+    # ``position`` is the entity's eye/centre and the physics puts the ground
+    # 1.75 blocks below it (see ``_has_support``). Model space is Y-down with
+    # vanilla feet at model y=24. At 1/16 scale that already lowers them 1.5
+    # blocks, so the root only needs another 0.25-block offset to meet ground.
+    GROUND_OFFSET = -0.25
     MODEL_OFFSET = 0.0
 
     WANDER_SPEED = 0.7          # blocks/second, Minecraft passive mob speed
@@ -207,7 +212,9 @@ class PassiveMob(Entity):
         glEnable(GL_TEXTURE_2D)
         glColor3f(1, 1, 1)
         glPushMatrix()
-        glTranslatef(self.position[0], self.position[1] + self.MODEL_OFFSET, self.position[2])
+        glTranslatef(self.position[0],
+                     self.position[1] + self.GROUND_OFFSET + self.MODEL_OFFSET,
+                     self.position[2])
         glScalef(1, -1, 1)
         glScalef(self.MODEL_SCALE, self.MODEL_SCALE, self.MODEL_SCALE)
         glRotatef(self.rotation[1] + 180, 0, 1, 0)

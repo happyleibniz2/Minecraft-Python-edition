@@ -4,7 +4,29 @@ import threading
 
 
 class PerlinNoise(threading.Thread):
-    def __call__(self, x, y): return int(sum(self.noise(x * s, y * s) * h for s, h in self.perlins) * self.avg)
+    def __call__(self, x, y):
+        """Sum the octaves at (x, y).
+
+        The octave table lists every scale twice, so each unique scale is
+        evaluated once here and its weight doubled. That halves the noise work
+        while producing bit-identical results.
+        """
+        cache = self._cache
+        key = (x, y)
+        cached = cache.get(key)
+        if cached is not None:
+            return cached
+
+        total = 0.0
+        noise2d = self.noise2d
+        for scale, weight in self._octaves:
+            total += noise2d(x * scale, y * scale) * weight
+        value = int(total * self.avg)
+
+        if len(cache) >= self._cache_limit:
+            cache.clear()
+        cache[key] = value
+        return value
 
     def __init__(self, seed=10000, mh=0):
         super().__init__()
@@ -17,8 +39,59 @@ class PerlinNoise(threading.Thread):
         self.pp = p
         self.avg = mh * len(p) / sum(f + i for f, i in p)
 
+        # collapse the duplicated octaves into (scale, combined weight)
+        combined = {}
+        for scale, height in p:
+            combined[scale] = combined.get(scale, 0) + height
+        self._octaves = tuple(combined.items())
+
+        # terrain and biome lookups repeat the same columns constantly
+        self._cache = {}
+        self._cache_limit = 1 << 16
+
     def updateAvg(self, mh):
         self.avg = mh * len(self.pp) / sum(f + i for f, i in self.pp)
+        self._cache.clear()
+
+    def noise2d(self, x, y):
+        """``noise`` with z fixed at 0, inlined for speed.
+
+        Note this is *not* plain 2D noise: with z = 0 the original still
+        interpolates between the z and z-1 lattice planes (w = fade(0) = 0
+        selects the first, but ``grad`` still consumes z). The maths below is
+        therefore kept identical to ``noise`` and only avoids recomputing
+        floors, modulo and attribute lookups.
+        """
+        p = self.p
+        m = self.m
+        xf = math.floor(x)
+        yf = math.floor(y)
+        X = xf % m
+        Y = yf % m
+        x -= xf
+        y -= yf
+
+        u = x * x * x * (x * (x * 6 - 15) + 10)
+        v = y * y * y * (y * (y * 6 - 15) + 10)
+
+        A = p[X] + Y
+        B = p[X + 1] + Y
+        AA = p[A]
+        AB = p[A + 1]
+        BA = p[B]
+        BB = p[B + 1]
+
+        grad = self.grad
+        x1 = x - 1
+        y1 = y - 1
+        # w = fade(0) = 0, so only the z-plane terms survive the outer lerp
+        a = grad(p[AA], x, y, 0)
+        b = grad(p[BA], x1, y, 0)
+        c = grad(p[AB], x, y1, 0)
+        d = grad(p[BB], x1, y1, 0)
+        lower = (a + u * (b - a))
+        upper = (c + u * (d - c))
+        return lower + v * (upper - lower)
 
     def fade(self, t): return t * t * t * (t * (t * 6 - 15) + 10)
 

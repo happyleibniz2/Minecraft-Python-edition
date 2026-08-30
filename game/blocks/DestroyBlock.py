@@ -23,6 +23,7 @@ class DestroyBlock:
         "cactus": 0.4,
         "sapling": 0.0,
         "tnt": 0.0,
+        "torch": 0.0,
         "ancient_debris": 30.0,
         "bone_block": 2.0,
         "cow": 0.5,

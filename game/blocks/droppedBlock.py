@@ -72,7 +72,7 @@ class droppedBlock:
             tex_coords = ('t2f', (0, 0, 1, 0, 1, 1, 0, 1))
             block = self.gl.block.get(name)
 
-            if block is not None:
+            if block is not None and name != "torch":
                 self.gl.stuffBatch.add(4, GL_QUADS, block[4], ('v3f', vertexes[0]), tex_coords)
                 if i[1][5]:
                     self.gl.stuffBatch.add(4, GL_QUADS, block[5], ('v3f', vertexes[1]), tex_coords)

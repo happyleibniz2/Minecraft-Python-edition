@@ -68,18 +68,20 @@ class CubeHandler:
     REPLACEABLE = ("water", "lava")
 
     def add(self, p, t, now=False, fluid_level=0, fluid_source=None, fluid_falling=False):
+        if t == "torch" and (p[0], p[1] - 1, p[2]) not in self.collidable:
+            return False
         if p in self.cubes:
             if t == "water" and self.cubes[p].name == "water":
                 source = fluid_level == 0 and not fluid_falling if fluid_source is None else fluid_source
                 self._set_water_state(p, FluidState(fluid_level, source, fluid_falling))
-                return
+                return True
             if t == "water" or self.cubes[p].name not in self.REPLACEABLE:
-                return
+                return False
             self._clear_fluid(p)
         cube = self.cubes[p] = Cube(t, p, self.block[t],
                                     'alpha' if t in self.alpha_textures else 'blend' if (t == 'water' or t == "lava") else 'solid')
 
-        if cube.name not in ('water', 'lava'):
+        if cube.name not in ('water', 'lava', 'torch'):
             self.collidable[p] = cube
         elif cube.name == "water":
             source = fluid_level == 0 and not fluid_falling if fluid_source is None else fluid_source
@@ -93,28 +95,15 @@ class CubeHandler:
             )
         self.render_chunks[chunk_key].add_cube(p, cube)
 
-        # Mark neighbours dirty
-        for dx, dy, dz in ((1,0,0), (-1,0,0), (0,1,0), (0,-1,0), (0,0,1), (0,0,-1)):
-            adj_key = self._get_chunk_key((p[0]+dx, p[1]+dy, p[2]+dz))
-            if adj_key in self.render_chunks:
-                self.render_chunks[adj_key].dirty = True
-
-        # Legacy adjacency (for shown flags – not used for rendering but kept)
-        for adj in adjacent(*cube.p):
-            if adj not in self.cubes:
-                self.set_adj(cube, adj, True)
-            else:
-                a, b = cube.type, self.cubes[adj].type
-                if a == b and (a == 'solid' or b == 'blend'):
-                    self.set_adj(self.cubes[adj], cube.p, False)
-                elif a != 'blend' and b != 'solid':
-                    self.set_adj(self.cubes[adj], cube.p, False)
-                    self.set_adj(cube, adj, True)
+        self._mark_boundary_chunks_dirty(p, chunk_key)
 
         if t == "water" and now:
             self._schedule_fluid(p)
         if now:
             self._schedule_adjacent_water(p)
+        if t == "torch" and getattr(self.gl, "light", None) is not None:
+            self.gl.light.addLightSource(*p)
+        return True
 
     def remove(self, p):
         if p not in self.cubes:
@@ -127,21 +116,25 @@ class CubeHandler:
         cube = self.cubes.pop(p)
         if p in self.collidable:
             del self.collidable[p]
+        if cube.name == "torch" and getattr(self.gl, "light", None) is not None:
+            self.gl.light.removeLightSource(*p)
 
         chunk_key = self._get_chunk_key(p)
         if chunk_key in self.render_chunks:
             self.render_chunks[chunk_key].remove_cube(p)
 
-        for dx, dy, dz in ((1,0,0), (-1,0,0), (0,1,0), (0,-1,0), (0,0,1), (0,0,-1)):
-            adj_key = self._get_chunk_key((p[0]+dx, p[1]+dy, p[2]+dz))
-            if adj_key in self.render_chunks:
-                self.render_chunks[adj_key].dirty = True
-
-        for adj in adjacent(*cube.p):
-            if adj in self.cubes:
-                self.set_adj(self.cubes[adj], cube.p, True)
+        self._mark_boundary_chunks_dirty(p, chunk_key)
         if was_water or cube.name != "water":
             self._schedule_adjacent_water(p)
+
+        # standing torches break when their supporting block disappears
+        above = (p[0], p[1] + 1, p[2])
+        above_cube = self.cubes.get(above)
+        if above_cube is not None and above_cube.name == "torch" and p not in self.collidable:
+            self.remove(above)
+            dropped = getattr(self.gl, "droppedBlock", None)
+            if dropped is not None:
+                dropped.addBlock(above, "torch")
 
     def _clear_fluid(self, p):
         self.fluids.pop(p, None)
@@ -354,6 +347,12 @@ class CubeHandler:
                 return self.gl.texture["water_flow"]
         return cube.t[face_index]
 
+    def get_light_coordinates(self, face_vertices):
+        light = getattr(self.gl, "light", None)
+        if light is None:
+            return 't2f', (0, 0, 1, 0, 1, 1, 0, 1)
+        return light.texture_coordinates(face_vertices)
+
     def get_water_color(self, p, fog=False):
         x, _, z = p
         seed = getattr(self.gl.worldGen, "seed", None)
@@ -460,23 +459,28 @@ class CubeHandler:
             return 0.0, 0.0
         return flow_x / length, flow_z / length
 
-    def set_adj(self, cube, adj, state):
-        x, y, z = cube.p
-        X, Y, Z = adj
-        d = X - x, Y - y, Z - z
-        f = 'left', 'right', 'bottom', 'top', 'back', 'front'
-        for i in (0, 1, 2):
-            if d[i] == 0:
-                continue
-            j = i + i
-            if d[i] > 0:
-                a, b = f[j + 1], f[j]
-            else:
-                a, b = f[j], f[j + 1]
-            cube.shown[a] = state
-            if not state and cube.faces[a]:
-                cube.faces[a].delete()
-                cube.faces[a] = None
+    def _mark_boundary_chunks_dirty(self, p, chunk_key):
+        """Only adjacent render chunks can change when a boundary block changes."""
+        sx, sy, sz = self.RENDER_CHUNK_SIZE
+        local_x, local_y, local_z = p[0] % sx, p[1] % sy, p[2] % sz
+        neighbours = []
+        if local_x == 0:
+            neighbours.append((chunk_key[0] - 1, chunk_key[1], chunk_key[2]))
+        elif local_x == sx - 1:
+            neighbours.append((chunk_key[0] + 1, chunk_key[1], chunk_key[2]))
+        if local_y == 0:
+            neighbours.append((chunk_key[0], chunk_key[1] - 1, chunk_key[2]))
+        elif local_y == sy - 1:
+            neighbours.append((chunk_key[0], chunk_key[1] + 1, chunk_key[2]))
+        if local_z == 0:
+            neighbours.append((chunk_key[0], chunk_key[1], chunk_key[2] - 1))
+        elif local_z == sz - 1:
+            neighbours.append((chunk_key[0], chunk_key[1], chunk_key[2] + 1))
+
+        for key in neighbours:
+            chunk = self.render_chunks.get(key)
+            if chunk is not None:
+                chunk.dirty = True
 
     def updateCube(self, cube, customColor=None):
         # No‑op – we use chunk rebuilds
