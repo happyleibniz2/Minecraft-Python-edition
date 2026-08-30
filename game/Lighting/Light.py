@@ -46,6 +46,7 @@ uniform int shadowsEnabled;
 uniform vec2 shadowTexel;
 uniform vec2 cloudOffset;
 uniform float cloudCoverage;
+uniform float weatherStrength;
 varying vec4 vertexColor;
 varying float torchLight;
 varying float fogDistance;
@@ -115,9 +116,11 @@ void main() {
     vec3 torchColor = vec3(1.18, 0.73, 0.38) * torchLight * flicker;
     vec3 illumination = max(skylight, torchColor);
 
-    float sunShadow = mix(1.0, realtimeShadow(), dayAmount * 0.82);
+    float sunShadowStrength = dayAmount * 0.82 * (1.0 - weatherStrength * 0.72);
+    float sunShadow = mix(1.0, realtimeShadow(), sunShadowStrength);
     float cloudField = cloudNoise((worldPosition.xz + cloudOffset) * 0.018);
-    float cloudDensity = smoothstep(cloudCoverage, cloudCoverage + 0.16, cloudField);
+    float cloudThreshold = 0.82 - cloudCoverage * 0.45;
+    float cloudDensity = smoothstep(cloudThreshold, cloudThreshold + 0.16, cloudField);
     float cloudShadow = 1.0 - cloudDensity * 0.24 * dayAmount;
     illumination *= min(sunShadow, cloudShadow);
 
@@ -163,12 +166,14 @@ class Light:
         self.shadow_texel_uniform = None
         self.cloud_offset_uniform = None
         self.cloud_coverage_uniform = None
+        self.weather_uniform = None
         self.fog_color = (0.5, 0.7, 1.0)
         self.fog_start = 10.0
         self.fog_end = 80.0
         self.elapsed = 0.0
         self.cloud_offset = (0.0, 0.0)
         self.cloud_coverage = 0.56
+        self.weather_strength = 0.0
         self.shadow_fbo = 0
         self.shadow_texture = 0
         self.shadow_matrix = np.identity(4, dtype=np.float32)
@@ -197,6 +202,7 @@ class Light:
             self.shadow_texel_uniform = glGetUniformLocation(self.shader, "shadowTexel")
             self.cloud_offset_uniform = glGetUniformLocation(self.shader, "cloudOffset")
             self.cloud_coverage_uniform = glGetUniformLocation(self.shader, "cloudCoverage")
+            self.weather_uniform = glGetUniformLocation(self.shader, "weatherStrength")
             self._initialize_shadow_map()
             return True
         except Exception as error:
@@ -236,6 +242,9 @@ class Light:
     def set_clouds(self, offset, coverage):
         self.cloud_offset = tuple(float(value) for value in offset[:2])
         self.cloud_coverage = float(coverage)
+
+    def set_weather(self, strength):
+        self.weather_strength = max(0.0, min(1.0, float(strength)))
 
     def get_vertex_light(self, vertex):
         """Smooth torch light at a vertex, 15 down to 0 over 15 blocks."""
@@ -288,6 +297,7 @@ class Light:
         glUniform2f(self.shadow_texel_uniform, 1.0 / self.SHADOW_SIZE, 1.0 / self.SHADOW_SIZE)
         glUniform2f(self.cloud_offset_uniform, *self.cloud_offset)
         glUniform1f(self.cloud_coverage_uniform, self.cloud_coverage)
+        glUniform1f(self.weather_uniform, self.weather_strength)
 
         if self.shadow_ready:
             glActiveTexture(GL_TEXTURE1)

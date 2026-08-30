@@ -18,7 +18,9 @@ class Clouds:
         self.gl = gl
         self.wind_x = 0.0
         self.wind_z = 0.0
-        self.coverage = 0.56
+        self.base_coverage = 0.56
+        self.coverage = self.base_coverage
+        self.weather_strength = 0.0
         self.clusters = self._build_clusters()
         self.texture = self._build_puff_texture()
 
@@ -32,6 +34,10 @@ class Clouds:
         light = getattr(self.gl, "light", None)
         if light is not None:
             light.set_clouds(self.shadow_offset, self.coverage)
+
+    def set_weather(self, strength):
+        self.weather_strength = max(0.0, min(1.0, float(strength)))
+        self.coverage = min(0.82, self.base_coverage + self.weather_strength * 0.24)
 
     def render(self, player, cycle):
         if self.texture is None:
@@ -63,9 +69,9 @@ class Clouds:
         puffs.sort(reverse=True)
         daylight = cycle.sky_brightness
         color = (
-            0.20 + daylight * 0.80,
-            0.23 + daylight * 0.75,
-            0.31 + daylight * 0.69,
+            0.20 + daylight * (0.80 - self.weather_strength * 0.28),
+            0.23 + daylight * (0.75 - self.weather_strength * 0.30),
+            0.31 + daylight * (0.69 - self.weather_strength * 0.32),
         )
 
         glPushAttrib(GL_ENABLE_BIT | GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT | GL_CURRENT_BIT)

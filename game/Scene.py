@@ -220,6 +220,8 @@ class Scene:
         self.genWorld()
 
         self.dayNight.update(dt)
+        self.clouds.set_weather(self.dayNight.weather_strength)
+        self.light.set_weather(self.dayNight.weather_strength)
         self.light.set_sky_brightness(self.dayNight.sky_brightness)
         self.skyColor = [round(component * 255) for component in self.dayNight.sky_color]
 
