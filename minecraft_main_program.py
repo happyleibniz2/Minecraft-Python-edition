@@ -121,6 +121,14 @@ def show_settings():
     global mainFunction
     mainFunction = draw_settings_menu
 
+def show_shader_settings():
+    global mainFunction
+    mainFunction = draw_shader_settings_menu
+
+def close_shader_settings():
+    global mainFunction
+    mainFunction = draw_settings_menu
+
 def toggle_shaders():
     settings.set_shaders(not settings.SHADERS)
     scene.light.set_enabled(settings.SHADERS)
@@ -266,41 +274,14 @@ def draw_settings_menu(mc):
     lang_button.y = scene.HEIGHT // 2 - (lang_button.button.height // 2) - 30
     lang_button.update(mp, mc)
 
-    shader_button = Button(
-        scene,
-        f"Shaders: {'YES' if settings.SHADERS else 'NO'}",
-        0,
-        0,
+    shader_settings_button = Button(
+        scene, "Shader Settings...", 0, 0,
         text_x=scene.WIDTH // 2 - (400 // 2),
     )
-    shader_button.setEvent(toggle_shaders)
-    shader_button.x = scene.WIDTH // 2 - (shader_button.button.width // 2) - 170
-    shader_button.y = scene.HEIGHT // 2 - (shader_button.button.height // 2) + 20
-    shader_button.update(mp, mc)
-
-    player_shadow_button = Button(
-        scene,
-        f"Player Shadows: {'YES' if settings.PLAYER_SHADOWS else 'NO'}",
-        0,
-        0,
-        text_x=scene.WIDTH // 2 - (400 // 2),
-    )
-    player_shadow_button.setEvent(toggle_player_shadows)
-    player_shadow_button.x = scene.WIDTH // 2 - (player_shadow_button.button.width // 2) - 170
-    player_shadow_button.y = scene.HEIGHT // 2 - (player_shadow_button.button.height // 2) + 70
-    player_shadow_button.update(mp, mc)
-
-    leaves_sway_button = Button(
-        scene,
-        f"Leaves Sway: {'YES' if settings.LEAVES_SWAY else 'NO'}",
-        0,
-        0,
-        text_x=scene.WIDTH // 2 - (400 // 2),
-    )
-    leaves_sway_button.setEvent(toggle_leaves_sway)
-    leaves_sway_button.x = scene.WIDTH // 2 - (leaves_sway_button.button.width // 2) - 170
-    leaves_sway_button.y = scene.HEIGHT // 2 - (leaves_sway_button.button.height // 2) + 120
-    leaves_sway_button.update(mp, mc)
+    shader_settings_button.setEvent(show_shader_settings)
+    shader_settings_button.x = scene.WIDTH // 2 - (shader_settings_button.button.width // 2) - 170
+    shader_settings_button.y = scene.HEIGHT // 2 - (shader_settings_button.button.height // 2) + 20
+    shader_settings_button.update(mp, mc)
 
     sound.musicPlayer.set_volume(soundVolumeSliderBox.val / 100)
     sound.volume = soundVolumeSliderBox.val / 100
@@ -415,6 +396,52 @@ def draw_main_menu(mc):
     drawInfoLabel(scene, splash, xx=1, yy=1, style=[('', '')], scale=var8, size=30, anchor_x='center',
                   label_color=(255, 255, 0), shadow_color=(63, 63, 0))
     glPopMatrix()
+    pygame.display.flip()
+
+def draw_shader_settings_menu(mc):
+    """Dedicated blank page for the Zentra shader controls."""
+    scene.set2d()
+    background = gui.GUI_TEXTURES["options_background"]
+    shade = gui.GUI_TEXTURES["black"]
+    for ix in range(0, scene.WIDTH, background.width):
+        for iy in range(0, scene.HEIGHT, background.height):
+            background.blit(ix, iy)
+            shade.blit(ix, iy)
+
+    mp = pygame.mouse.get_pos()
+    drawInfoLabel(scene, "Shader Settings", xx=scene.WIDTH // 2,
+                  yy=scene.HEIGHT - 42, style=[('', '')], size=18,
+                  anchor_x='center')
+
+    logo = gui.GUI_TEXTURES.get("zentra")
+    if logo is not None:
+        logo_x = max(28, scene.WIDTH // 2 - 330)
+        logo_y = scene.HEIGHT // 2 - logo.height // 2
+        logo.blit(logo_x, logo_y)
+        drawInfoLabel(scene, "Zentra teK", xx=logo_x + logo.width + 62,
+                      yy=logo_y + logo.height // 2, style=[('', '')], size=16,
+                      anchor_x='center')
+
+    center_x = scene.WIDTH // 2 + 105
+    button_x = center_x - 200
+    options = (
+        (f"Shaders: {'YES' if settings.SHADERS else 'NO'}", toggle_shaders),
+        (f"Player Shadows: {'YES' if settings.PLAYER_SHADOWS else 'NO'}", toggle_player_shadows),
+        (f"Leaves Sway: {'YES' if settings.LEAVES_SWAY else 'NO'}", toggle_leaves_sway),
+    )
+    for index, (text, callback) in enumerate(options):
+        button = Button(scene, text, 0, 0, text_x=center_x)
+        button.setEvent(callback)
+        button.x = button_x
+        button.y = scene.HEIGHT // 2 - 95 + index * 50
+        button.update(mp, mc)
+
+    back_button = Button(scene, "Back", 0, 0)
+    back_button.setEvent(close_shader_settings)
+    back_button.x = scene.WIDTH // 2 - back_button.button.width // 2
+    back_button.y = scene.HEIGHT // 2 + 145
+    back_button.update(mp, mc)
+
     pygame.display.flip()
     pyglet.gl.glViewport(0, 0, WIDTH, HEIGHT)
 
@@ -561,6 +588,7 @@ gui.GUI_TEXTURES = {
     "slider": pyglet.resource.image("gui/gui_elements/slider.png"),
     "language": pyglet.resource.image("gui/language_h.png"),
     "language_hover": pyglet.resource.image("gui/language_nh.png"),
+    "zentra": pyglet.resource.image("gui/Zentra.png"),
 }
 
 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
@@ -588,6 +616,9 @@ for i in this___:
     texture = gui.GUI_TEXTURES[i]
     texture.width /= 2
     texture.height /= 2
+zentra = gui.GUI_TEXTURES["zentra"]
+zentra.width = 96
+zentra.height = 96
 gui.addGuiElement("crosshair", (scene.WIDTH // 2 - 9, scene.HEIGHT // 2 - 9))
 
 player.inventory.initWindow()
