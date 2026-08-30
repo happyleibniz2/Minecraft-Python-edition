@@ -35,11 +35,19 @@
 ## 📸In game screenshots
 <img width="1274" height="754" alt="屏幕截图 2026-08-26 075310" src="https://github.com/user-attachments/assets/161883b2-27c2-4fb7-a7f4-bc6a62de4260" />
 <img width="1271" height="760" alt="屏幕截图 2026-08-26 075317" src="https://github.com/user-attachments/assets/78d54698-4012-43ab-be1e-e27055eb6f0d" />
+
+### Pre Classic 0.48
+
 <img width="1265" height="754" alt="屏幕截图 2026-08-28 233745" src="https://github.com/user-attachments/assets/fa05e708-d431-4c6c-b606-9b2d4af8ae3f" />
 <img width="1264" height="751" alt="屏幕截图 2026-08-28 233627" src="https://github.com/user-attachments/assets/c4d50b3d-7c31-411c-95c0-48b45c18db4b" />
 <img width="1268" height="743" alt="屏幕截图 2026-08-28 233757" src="https://github.com/user-attachments/assets/8c5ce4cb-9ace-45b5-8353-0079556be80f" />
 <img width="1265" height="744" alt="屏幕截图 2026-08-28 233722" src="https://github.com/user-attachments/assets/a47b5cc4-0488-43b0-ab16-b7b0f77ef92c" />
 <img width="1278" height="748" alt="屏幕截图 2026-08-28 233641" src="https://github.com/user-attachments/assets/26b4244f-e480-4553-bca3-ba6ad8ee2968" />
+
+### pre Classic 0.67
+
+<img width="1271" height="755" alt="屏幕截图 2026-08-30 050545" src="https://github.com/user-attachments/assets/0e086401-ed97-4d50-be79-7f2cae2c61e3" />
+<img width="1267" height="751" alt="屏幕截图 2026-08-30 050552" src="https://github.com/user-attachments/assets/09338636-22b5-41b9-9896-74825c4e9567" />
 
 
 
