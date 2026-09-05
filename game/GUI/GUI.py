@@ -1,3 +1,5 @@
+import time
+
 import pyglet
 from settings import *
 
@@ -10,7 +12,8 @@ class GUI:
         self.shows = {}
         self.gl = gl
 
-        self.lopacity = 255
+        self.lopacity = 0
+        self.tooltip_until = 0.0
         self.shadow_lbl = pyglet.text.Label("",
                                             font_name='Minecraft Rus',
                                             color=(56, 56, 56, self.lopacity),
@@ -26,18 +29,26 @@ class GUI:
         self.lbl.text = text
         self.shadow_lbl.text = text
         self.lopacity = 255
+        self.tooltip_until = time.monotonic() + 2.0
+
+    def hideText(self):
+        self.tooltip_until = 0.0
+        self.lopacity = 0
+        self.lbl.text = ""
+        self.shadow_lbl.text = ""
 
     def update(self):
         self.shadow_lbl.x = self.gl.WIDTH // 2 + 2
         self.lbl.x = self.gl.WIDTH // 2
-        self.lopacity -= 1
-        if self.lopacity < 0:
-            self.lopacity = 255
-        else:
+        remaining = self.tooltip_until - time.monotonic()
+        if remaining > 0 and self.lbl.text:
+            self.lopacity = min(255, round(remaining / 0.5 * 255))
             self.shadow_lbl.set_style("color", (56, 56, 56, self.lopacity))
             self.shadow_lbl.draw()
             self.lbl.set_style("color", (255, 255, 255, self.lopacity))
             self.lbl.draw()
+        elif self.lopacity:
+            self.hideText()
 
         for i in self.shows.values():
             i[0].blit(*i[1])

@@ -32,8 +32,7 @@ class PerlinNoise(threading.Thread):
         super().__init__()
         self.m = 65536
         p = list(range(self.m))
-        random.seed(seed)
-        random.shuffle(p)
+        random.Random(seed).shuffle(p)
         self.p = p + p
         p = self.perlins = tuple((1 / i, i) for i in (16, 20, 22, 31, 32, 64, 512) for j in range(2))
         self.pp = p

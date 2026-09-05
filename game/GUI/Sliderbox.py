@@ -16,6 +16,9 @@ class Sliderbox:
         self.bg = gl.gui.GUI_TEXTURES["edit_bg"]
         self.slider = gl.gui.GUI_TEXTURES["slider"]
 
+    def setEvent(self, event):
+        self.event = event
+
     def update(self, mp):
         pos = (self.bg.width / self.maxval) * self.val
         if pos > self.bg.width - self.slider.width:
@@ -34,6 +37,8 @@ class Sliderbox:
                 self.lastButtonClicked = True
         if self.lastButtonClicked and not pygame.mouse.get_pressed(3)[0]:
             self.gl.sound.playGuiSound("click")
+            if self.event is not None:
+                self.event(self.val)
             self.lastButtonClicked = False
 
         self.bg.blit(self.x, self.gl.HEIGHT - self.y - self.bg.height)

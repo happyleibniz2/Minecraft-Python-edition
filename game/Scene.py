@@ -11,11 +11,11 @@ from game.Particles import Particles
 from game.blocks.DestroyBlock import DestroyBlock
 from game.blocks.droppedBlock import droppedBlock
 from game.entity.Inventory import Inventory
-from game.entity.Zombie import Zombie
 from game.world.Clouds import Clouds
 from game.world.DayNightCycle import DayNightCycle
 from game.world.worldGenerator import worldGenerator
 from game.blocks.CubeHandler import CubeHandler
+from game.graphics import DisposableBatch
 import logging
 import settings as game_settings
 
@@ -32,12 +32,16 @@ class Scene:
         self.blockSound = None
         self.deathScreen = None
         self.player = None
+        self.stuffBatch = None
         self.lookingAt = "Nothing"
 
         self.texture, self.block, self.texture_dir, self.inventory_textures = {}, {}, {}, {}
         self.fov = FOV
         self.updateEvents = []
         self.entity = []
+        self.mod_entity_types = {}
+        self.mod_alpha_textures = set()
+        self.mod_loader = None
         self.show_hitboxes = False
         self.skyColor = [128, 179, 255]
         self.panorama = {}
@@ -49,6 +53,10 @@ class Scene:
         self.resetScene()
 
     def resetScene(self):
+        previous_light = getattr(self, "light", None)
+        if previous_light is not None:
+            previous_light.close()
+        self.entity.clear()
         self.allowEvents = {
             "movePlayer": True,
             "grabMouse": True,
@@ -124,26 +132,26 @@ class Scene:
         glHint(GL_FOG_HINT, GL_DONT_CARE)
         glFogi(GL_FOG_MODE, GL_LINEAR)
         glEnable(GL_TEXTURE_2D)
+        self.setAntialiasing(game_settings.ANTI_ALIASING)
 
         load_textures(self)
         self.loadPanoramaTextures()
         self.vertexList()
 
-        self.stuffBatch = pyglet.graphics.Batch()
+        if self.stuffBatch is not None and hasattr(self.stuffBatch, "dispose"):
+            self.stuffBatch.dispose()
+        self.stuffBatch = DisposableBatch()
 
         self.player.inventory = Inventory(self)
         self.cubes = CubeHandler(
             None,
             self.block,
             None,
-            ('leaves_taiga', 'leaves_oak', 'tall_grass', 'nocolor', 'sapling', 'torch'),
+            tuple({'leaves_taiga', 'leaves_oak', 'tall_grass', 'nocolor', 'sapling', 'torch'}
+                  | self.mod_alpha_textures),
             self
         )
         self.light.initialize()
-
-        self.zombie = Zombie(self)
-        self.zombie.position = [0, 100, 0]
-        self.entity.append(self.zombie)
 
         self.set3d()
 
@@ -210,14 +218,17 @@ class Scene:
         if self.drawCounter > self.genTime:
             self.drawCounter = 0
             initial_generation = self.genTime <= 1
-            self.worldGen.genChunk(
+            result = self.worldGen.genChunk(
                 self.player,
                 max_chunks_per_call=8 if initial_generation else 1,
                 max_blocks_per_call=1024 if initial_generation else 256,
+                time_budget=0 if initial_generation else 0.004,
             )
+            return bool(result[0] or result[1])
+        return False
 
     def updateScene(self, dt):
-        self.genWorld()
+        generated_world = self.genWorld()
 
         self.dayNight.update(dt)
         self.clouds.set_weather(self.dayNight.weather_strength)
@@ -226,7 +237,8 @@ class Scene:
         self.skyColor = [round(component * 255) for component in self.dayNight.sky_color]
 
         self.cubes.update_fluids(dt)
-        self.cubes.rebuild_dirty_chunks(self.player.position)
+        if not generated_world:
+            self.cubes.rebuild_dirty_chunks(self.player.position)
         self.in_water = roundPos(self.player.position) in self.cubes.fluids
 
         if self.in_water:
@@ -240,8 +252,8 @@ class Scene:
             fog = self.dayNight.fog_color
             glFogfv(GL_FOG_COLOR, (GLfloat * 4)(fog[0], fog[1], fog[2], 1))
             glFogf(GL_FOG_START, 10)
-            glFogf(GL_FOG_END, 80)
-            self.light.set_environment(fog, 10, 80)
+            glFogf(GL_FOG_END, 64)
+            self.light.set_environment(fog, 10, 64)
 
         self.set3d()
         glClearColor(self.skyColor[0] / 255, self.skyColor[1] / 255, self.skyColor[2] / 255, 1)
@@ -253,8 +265,11 @@ class Scene:
         self.clouds.update(dt)
         self.droppedBlock.update(dt)
 
-        for i in self.entity:
+        for i in self.entity[:]:
             i.update(dt)
+
+        if self.mod_loader is not None:
+            self.mod_loader.post("client_tick", scene=self, dt=dt)
 
         self.light.update(dt)
 
@@ -294,8 +309,13 @@ class Scene:
         try:
             self.cubes.render(self.player.position)
 
+            entity_distance = CHUNKS_RENDER_DISTANCE * CHUNKS_RENDER_DISTANCE
             for i in self.entity:
-                i.render(dt)
+                dx = i.position[0] - self.player.position[0]
+                dy = i.position[1] - self.player.position[1]
+                dz = i.position[2] - self.player.position[2]
+                if dx * dx + dy * dy + dz * dz <= entity_distance:
+                    i.render(dt)
 
             self.cubes.render_water()
             self.particles.drawParticles(dt)
@@ -304,16 +324,40 @@ class Scene:
                 self.stuffBatch.draw()
             except pyglet.gl.lib.GLException:
                 logging.exception("GL batch draw failed while rendering scene")
+            if self.mod_loader is not None:
+                self.mod_loader.post("render_world", scene=self, dt=dt)
         finally:
             self.light.end_render()
-        self.stuffBatch = pyglet.graphics.Batch()
+        self.stuffBatch.dispose()
+        self.stuffBatch = DisposableBatch()
 
         if self.show_hitboxes:
             self.drawEntityHitboxes()
 
         self.set2d()
+        self.player.renderHeldItem()
         if self.in_water:
             self.drawWaterOverlay()
+        if getattr(self.player, "hurt_time", 0) > 0:
+            self.drawDamageOverlay()
+
+    def drawPaused(self):
+        """Redraw the frozen world behind a menu without ticking simulation."""
+        self.set3d()
+        glClearColor(self.skyColor[0] / 255, self.skyColor[1] / 255, self.skyColor[2] / 255, 1)
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+        glLoadIdentity()
+        self.droppedBlock.render()
+        self.draw(0.0)
+
+    def setAntialiasing(self, enabled):
+        """Toggle multisample anti-aliasing on the active framebuffer."""
+        samples = int(glGetIntegerv(GL_SAMPLES))
+        if enabled and samples > 0:
+            glEnable(GL_MULTISAMPLE)
+            return True
+        glDisable(GL_MULTISAMPLE)
+        return False
 
     def drawCelestialSky(self):
         """Draw the moving sun, moon and night stars behind the world."""
@@ -447,6 +491,24 @@ class Scene:
         finally:
             glPopAttrib()
 
+    def drawDamageOverlay(self):
+        """Brief red vignette-style flash while player hurt immunity is active."""
+        alpha = min(0.32, self.player.hurt_time / 0.5 * 0.32)
+        glPushAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT | GL_CURRENT_BIT)
+        try:
+            glDisable(GL_TEXTURE_2D)
+            glEnable(GL_BLEND)
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+            glColor4f(0.72, 0.02, 0.02, alpha)
+            glBegin(GL_QUADS)
+            glVertex2f(0, 0)
+            glVertex2f(self.WIDTH, 0)
+            glVertex2f(self.WIDTH, self.HEIGHT)
+            glVertex2f(0, self.HEIGHT)
+            glEnd()
+        finally:
+            glPopAttrib()
+
     def drawEntityHitboxes(self):
         """Minecraft F3+B-style entity AABBs and facing vectors."""
         glPushAttrib(GL_ENABLE_BIT | GL_CURRENT_BIT | GL_LINE_BIT | GL_DEPTH_BUFFER_BIT)
@@ -487,13 +549,20 @@ class Scene:
 
     def renderShadowMap(self):
         """Render terrain, entities and block entities from the moving light."""
+        if not self.light.should_update_shadow(self.player.position, self.dayNight.light_direction):
+            return
         if not self.light.begin_shadow_pass(self.player.position, self.dayNight.light_direction):
             return
         try:
-            self.cubes.render_shadow(self.player.position, self.light.SHADOW_RADIUS * 1.5)
+            self.cubes.render_shadow(self.player.position, self.light.SHADOW_RADIUS * 2.0)
 
+            entity_shadow_distance = (self.light.SHADOW_RADIUS * 2.0) ** 2
             for entity in self.entity:
-                if not getattr(entity, "is_dead", False):
+                dx = entity.position[0] - self.player.position[0]
+                dy = entity.position[1] - self.player.position[1]
+                dz = entity.position[2] - self.player.position[2]
+                if (not getattr(entity, "is_dead", False)
+                        and dx * dx + dy * dy + dz * dz <= entity_shadow_distance):
                     entity.render(0)
 
             # At this point the dynamic batch contains dropped/block entities;
@@ -512,7 +581,8 @@ class Scene:
         """Simple player-sized depth proxy used only by the shadow map."""
         x, y, z = self.player.position
         x0, x1 = x - 0.3, x + 0.3
-        y0, y1 = y - 1.25, y + 0.55
+        y0 = y - getattr(self.player, "FEET_OFFSET", 1.62)
+        y1 = y0 + getattr(self.player, "HEIGHT", 1.8)
         z0, z1 = z - 0.3, z + 0.3
         vertices = (
             (x0, y0, z0), (x1, y0, z0), (x1, y1, z0), (x0, y1, z0),
@@ -540,7 +610,9 @@ class Scene:
         from game.entity.Sheep import Sheep
         from game.entity.Zombie import Zombie
 
-        return {"cow": Cow, "sheep": Sheep, "zombie": Zombie}
+        entities = {"cow": Cow, "sheep": Sheep, "zombie": Zombie}
+        entities.update(self.mod_entity_types)
+        return entities
 
     def hitTestEntity(self, origin, direction, max_distance=3.0):
         """Return the closest visible entity under the crosshair."""
@@ -560,7 +632,13 @@ class Scene:
         for entity in self.entity[:]:
             if getattr(entity, "is_dead", False):
                 continue
-            distance = self._rayAabbDistance(origin, ray, entity.get_hitbox())
+            bounds = entity.get_hitbox()
+            margin = getattr(entity, "pick_radius", 0.0)
+            expanded = (
+                bounds[0] - margin, bounds[1] - margin, bounds[2] - margin,
+                bounds[3] + margin, bounds[4] + margin, bounds[5] + margin,
+            )
+            distance = self._rayAabbDistance(origin, ray, expanded)
             if distance is not None and distance <= closest_distance:
                 closest = entity
                 closest_distance = distance
@@ -604,6 +682,9 @@ class Scene:
         entity.position = list(position)
         entity.rotation[1] = random.randint(0, 360)
         self.entity.append(entity)
+        if self.mod_loader is not None:
+            self.mod_loader.post("entity_spawned", scene=self, entity=entity,
+                                 entity_id=label.lower())
         print(f"{label} spawned at {position}")
         return entity
 

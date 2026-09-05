@@ -17,6 +17,8 @@ from game.entity.Entity import Entity
 
 
 class PassiveMob(Entity):
+    _texture_cache = {}
+    _display_list_cache = {}
     TEXTURE_PATH = ""
     TEXTURE_SIZE = (64, 32)
     PARTS = ()
@@ -61,6 +63,9 @@ class PassiveMob(Entity):
 
     # ------------------------------------------------------------- textures
     def _load_texture(self, path):
+        cached = self._texture_cache.get(path)
+        if cached is not None:
+            return cached
         image = pyglet.image.load(path)
         texture = image.get_texture()
         glBindTexture(GL_TEXTURE_2D, texture.id)
@@ -68,7 +73,9 @@ class PassiveMob(Entity):
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
-        return texture, image
+        result = (texture, image)
+        self._texture_cache[path] = result
+        return result
 
     def _load_textures(self):
         if not self.TEXTURE_PATH:
@@ -270,14 +277,22 @@ class PassiveMob(Entity):
             (4, 5, 6, 7, texU + d + w + d, texV + d,     texU + d + w + d + w, texV + d + h),
         ]
 
-        glBegin(GL_QUADS)
-        for i0, i1, i2, i3, u0, v0, u1, v1 in polygons:
-            u0n, u1n = u0 / self.tex_w, u1 / self.tex_w
-            v0n, v1n = 1 - v0 / self.tex_h, 1 - v1 / self.tex_h
-            glTexCoord2f(u0n, v0n); glVertex3f(*v[i0])
-            glTexCoord2f(u1n, v0n); glVertex3f(*v[i1])
-            glTexCoord2f(u1n, v1n); glVertex3f(*v[i2])
-            glTexCoord2f(u0n, v1n); glVertex3f(*v[i3])
-        glEnd()
+        cache_key = (part, self.tex_w, self.tex_h)
+        display_list = self._display_list_cache.get(cache_key)
+        if display_list is None:
+            display_list = glGenLists(1)
+            glNewList(display_list, GL_COMPILE)
+            glBegin(GL_QUADS)
+            for i0, i1, i2, i3, u0, v0, u1, v1 in polygons:
+                u0n, u1n = u0 / self.tex_w, u1 / self.tex_w
+                v0n, v1n = 1 - v0 / self.tex_h, 1 - v1 / self.tex_h
+                glTexCoord2f(u0n, v0n); glVertex3f(*v[i0])
+                glTexCoord2f(u1n, v0n); glVertex3f(*v[i1])
+                glTexCoord2f(u1n, v1n); glVertex3f(*v[i2])
+                glTexCoord2f(u0n, v1n); glVertex3f(*v[i3])
+            glEnd()
+            glEndList()
+            self._display_list_cache[cache_key] = display_list
+        glCallList(display_list)
 
         glPopMatrix()

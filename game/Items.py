@@ -47,6 +47,7 @@ NON_BLOCK_ITEMS = {"water_bucket", "bucket"}
 
 # internal texture layers that must never appear as usable items
 INTERNAL_TEXTURES = {"spawn_egg", "spawn_egg_overlay"}
+CUSTOM_STACK_SIZES = {}
 
 
 def tool_name(tier, kind):
@@ -90,7 +91,14 @@ def is_item(name):
 
 def max_stack_size(name):
     """Tools are unstackable in Minecraft; everything else stacks to 64."""
+    if name in CUSTOM_STACK_SIZES:
+        return CUSTOM_STACK_SIZES[name]
     return 1 if is_tool(name) else 64
+
+
+def register_item(name, stack_size=64):
+    CUSTOM_STACK_SIZES[name] = max(1, min(64, int(stack_size)))
+    NON_BLOCK_ITEMS.add(name)
 
 
 def max_durability(name):

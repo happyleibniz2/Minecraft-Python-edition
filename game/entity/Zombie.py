@@ -2,10 +2,13 @@ import math
 import pyglet
 from OpenGL.GL import *
 from game.entity.Entity import Entity
+import settings
 
 class Zombie(Entity):
     def __init__(self, gl):
         super().__init__(gl)
+        self.width = 0.6
+        self.height = 1.95
 
         # Load texture
         try:
@@ -41,27 +44,41 @@ class Zombie(Entity):
         self.stop_distance = 1
         self.jump_velocity = 5.5
         self.jump_cooldown = 0
+        self.attack_cooldown = 0.0
 
     def update(self, dt):
         if self.is_dead:
             return
+        if settings.DIFFICULTY == "PEACEFUL":
+            self.die()
+            return
         self.tick_combat(dt)
         self.time += dt * 10
         self.jump_cooldown = max(0, self.jump_cooldown - dt)
+        self.attack_cooldown = max(0, self.attack_cooldown - dt)
 
         move_x = 0
         move_z = 0
         player = getattr(self.gl, 'player', None)
-        if player is not None and not getattr(player, 'playerDead', False):
+        if (player is not None and not getattr(player, 'playerDead', False)
+                and not getattr(player, "is_spectator", False)):
             dx = player.position[0] - self.position[0]
+            dy = player.position[1] - self.position[1]
             dz = player.position[2] - self.position[2]
             dist = math.hypot(dx, dz)
+            attack_distance = math.sqrt(dx * dx + dy * dy + dz * dz)
             if dist > 0:
                 self.rotation[1] = math.degrees(math.atan2(dx, dz))
             if self.stop_distance < dist <= self.follow_range:
                 step = min(self.speed * dt * 60, dist - self.stop_distance)
                 move_x = dx / dist * step
                 move_z = dz / dist * step
+            if (attack_distance <= 1.43
+                    and self.attack_cooldown == 0
+                    and self._can_reach_player(player)):
+                damage = {"EASY": 2.5, "NORMAL": 3, "HARD": 4.5}[settings.DIFFICULTY]
+                self.attack_cooldown = 1.0
+                player.hurt(damage, "zombie", self)
 
         sub_steps = 10
         sub_dt = dt / sub_steps
@@ -80,6 +97,26 @@ class Zombie(Entity):
                 self.jump_cooldown = 0.35
 
         self.bInAir = not self._is_grounded()
+
+    def _can_reach_player(self, player):
+        """Reject melee attacks when a solid block separates both entities."""
+        hit_test = getattr(getattr(self.gl, "cubes", None), "hitTest", None)
+        if hit_test is None:
+            return True
+        origin = (self.position[0], self.position[1], self.position[2])
+        offset = tuple(player.position[index] - origin[index] for index in range(3))
+        distance = math.sqrt(sum(value * value for value in offset))
+        if distance <= 1e-6:
+            return True
+        direction = tuple(value / distance for value in offset)
+        block, _ = hit_test(origin, direction, dist=max(1, math.ceil(distance)))
+        if block is None:
+            return True
+        block_offset = tuple(block[index] - origin[index] for index in range(3))
+        block_distance = sum(block_offset[index] * direction[index] for index in range(3))
+        # The block coordinate is its center; its near face is roughly 0.5
+        # blocks closer. Permit only hits whose block starts beyond the player.
+        return block_distance >= distance + 0.2
 
     def _is_grounded(self):
         if self.dy > 0:

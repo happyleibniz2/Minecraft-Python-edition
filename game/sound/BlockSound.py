@@ -1,17 +1,19 @@
 from random import randint
 import traceback
 import logging
+from game.sound.SoundPhysics import SoundPhysics
 
 class BlockSound:
     def __init__(self, gl):
         self.gl = gl
         self.cntr = 0
         self.pickUpAlreadyPlayed = False
+        self.physics = SoundPhysics(gl)
 
-    def _safe_set_volume(self, chnl):
+    def _safe_set_volume(self, chnl, position=None):
         if chnl is not None:
             try:
-                chnl.set_volume(self.gl.sound.volume)
+                self.physics.apply(chnl, position, self.gl.sound.volume)
             except Exception as e:
                 print(e)
                 print("Beginning Error Report...")
@@ -38,10 +40,6 @@ class BlockSound:
         return blName
 
     def damageByBlock(self, blockName, hp):
-        self.cntr += 1
-        if self.cntr % 100 != 0 or self.cntr == 0:
-            return
-
         sound = self.gl.sound.SOUNDS["damage"]["fallbig"][0]
 
         if blockName.endswith("wool"):
@@ -53,7 +51,7 @@ class BlockSound:
         chnl = sound.play()
         self._safe_set_volume(chnl)
 
-    def playStepSound(self, blockName, custom=300):
+    def playStepSound(self, blockName, custom=300, position=None):
         self.cntr += 1
         if self.cntr % custom != 0 or self.cntr == 0:
             return
@@ -61,19 +59,19 @@ class BlockSound:
 
         bl = len(self.gl.sound.BLOCKS_SOUND["step"][blName])
         chnl = self.gl.sound.BLOCKS_SOUND["step"][blName][randint(0, bl - 1)].play()
-        self._safe_set_volume(chnl)
+        self._safe_set_volume(chnl, position)
 
-    def playBoomSound(self):
+    def playBoomSound(self, position=None):
         bl = len(self.gl.sound.BLOCKS_SOUND["explode"])
         chnl = self.gl.sound.BLOCKS_SOUND["explode"][randint(0, bl - 1)].play()
-        self._safe_set_volume(chnl)
+        self._safe_set_volume(chnl, position)
 
-    def playBlockSound(self, blockName):
+    def playBlockSound(self, blockName, position=None):
         blName = self.getBlockSound(blockName)
 
         bl = len(self.gl.sound.BLOCKS_SOUND["dig"][blName])
         chnl = self.gl.sound.BLOCKS_SOUND["dig"][blName][randint(0, bl - 1)].play()
-        self._safe_set_volume(chnl)
+        self._safe_set_volume(chnl, position)
 
     def playPickUpSound(self):
         if not self.pickUpAlreadyPlayed:

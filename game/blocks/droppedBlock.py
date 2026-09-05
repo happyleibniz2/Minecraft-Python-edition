@@ -17,17 +17,10 @@ class droppedBlock:
         ]
 
     def update(self, dt):
-        cpy = self.blocks.copy().items()
-        for i in cpy:
-            entry = i[1]
+        for key, entry in tuple(self.blocks.items()):
             entry[7] = max(0.0, entry[7] - dt)
             self._update_physics(entry, dt)
             pp = list(self.gl.player.position)
-            sx, sy, sz = 0.25, 0.25, 0.25
-
-            x, y, z = 0, 0, 0
-            X, Y, Z = x + sx, y + sy, z + sz
-            kx, ky, kz = i[1][0][0] - i[1][2], i[1][0][1] + 0.1 + i[1][3][0], i[1][0][2] + i[1][2]
 
             dx = pp[0] - entry[0][0]
             dy = pp[1] - entry[0][1]
@@ -38,72 +31,69 @@ class droppedBlock:
                 if leftover < entry[8]:
                     self.gl.blockSound.playPickUpSound()
                 if leftover <= 0:
-                    self.blocks.pop(i[0])
+                    self.blocks.pop(key, None)
                 else:
                     entry[8] = leftover
                 continue
 
-            vertexes = [
-                (X, y, z, x, y, z, x, Y, z, X, Y, z),
-                (x, y, Z, X, y, Z, X, Y, Z, x, Y, Z),
-                (x, y, z, x, y, Z, x, Y, Z, x, Y, z),
-                (X, y, Z, X, y, z, X, Y, z, X, Y, Z),
-                (x, y, z, X, y, z, X, y, Z, x, y, Z),
-                (x, Y, Z, X, Y, Z, X, Y, z, x, Y, z),
-            ]
-
-            rot = np.array([
-                [math.cos(i[1][4]), 0, math.sin(i[1][4]), 1],
-                [0, 1, 0, 1],
-                [-math.sin(i[1][4]), 0, math.cos(i[1][4]), 1],
-                [0, 0, 0, 1],
-            ])
-            i[1][4] += dt * 0.5  # radians per second
-
-            for e, j in enumerate(vertexes):
-                r1 = ((j[0], j[1], j[2], 1),
-                      (j[3], j[4], j[5], 1),
-                      (j[6], j[7], j[8], 1),
-                      (j[9], j[10], j[11], 1)) @ rot
-                vertexes[e] = (r1[0][0] + kx, r1[0][1] + ky, r1[0][2] + kz,
-                               r1[1][0] + kx, r1[1][1] + ky, r1[1][2] + kz,
-                               r1[2][0] + kx, r1[2][1] + ky, r1[2][2] + kz,
-                               r1[3][0] + kx, r1[3][1] + ky, r1[3][2] + kz)
-
-            name = i[1][1]
-            tex_coords = ('t2f', (0, 0, 1, 0, 1, 1, 0, 1))
-            block = self.gl.block.get(name)
-
-            if block is not None and name != "torch":
-                self.gl.stuffBatch.add(4, GL_QUADS, block[4], ('v3f', vertexes[0]), tex_coords)
-                if i[1][5]:
-                    self.gl.stuffBatch.add(4, GL_QUADS, block[5], ('v3f', vertexes[1]), tex_coords)
-                    self.gl.stuffBatch.add(4, GL_QUADS, block[0], ('v3f', vertexes[2]), tex_coords)
-                    self.gl.stuffBatch.add(4, GL_QUADS, block[1], ('v3f', vertexes[3]), tex_coords)
-                    self.gl.stuffBatch.add(4, GL_QUADS, block[2], ('v3f', vertexes[4]), tex_coords)
-                    self.gl.stuffBatch.add(4, GL_QUADS, block[3], ('v3f', vertexes[5]), tex_coords)
-            else:
-                # items (buckets, saplings...) have no block faces; Minecraft
-                # renders them as a flat sprite instead of a cube
-                item = self.gl.texture.get(name)
-                if item is not None:
-                    self.gl.stuffBatch.add(4, GL_QUADS, item, ('v3f', vertexes[0]), tex_coords)
-                    self.gl.stuffBatch.add(4, GL_QUADS, item, ('v3f', vertexes[1]), tex_coords)
-
-            if i[1][3][1] == "-":
-                i[1][3][0] -= 0.003 * dt * 60
-            if i[1][3][1] == "+":
-                i[1][3][0] += 0.003 * dt * 60
-
-            if i[1][3][0] < -0.1:
-                i[1][3][1] = "+"
-            if i[1][3][0] > 0.1:
-                i[1][3][1] = "-"
-
-            if i[1][0][1] < -90:
-                self.blocks.pop(i[0])
+            entry[4] += dt * 0.5
+            entry[3][0] += (0.003 if entry[3][1] == "+" else -0.003) * dt * 60
+            if entry[3][0] < -0.1:
+                entry[3][1] = "+"
+            if entry[3][0] > 0.1:
+                entry[3][1] = "-"
+            if entry[0][1] < -90:
+                self.blocks.pop(key, None)
                 continue
-            self.blocks[i[0]][4] = i[1][4]
+            self._add_to_batch(entry)
+
+    def render(self):
+        for entry in self.blocks.values():
+            self._add_to_batch(entry)
+
+    def _add_to_batch(self, entry):
+        x, y, z = 0, 0, 0
+        X, Y, Z = 0.25, 0.25, 0.25
+        kx = entry[0][0] - entry[2]
+        ky = entry[0][1] + 0.1 + entry[3][0]
+        kz = entry[0][2] + entry[2]
+        vertexes = [
+            (X, y, z, x, y, z, x, Y, z, X, Y, z),
+            (x, y, Z, X, y, Z, X, Y, Z, x, Y, Z),
+            (x, y, z, x, y, Z, x, Y, Z, x, Y, z),
+            (X, y, Z, X, y, z, X, Y, z, X, Y, Z),
+            (x, y, z, X, y, z, X, y, Z, x, y, Z),
+            (x, Y, Z, X, Y, Z, X, Y, z, x, Y, z),
+        ]
+        angle = entry[4]
+        rotation = np.array([
+            [math.cos(angle), 0, math.sin(angle), 1],
+            [0, 1, 0, 1],
+            [-math.sin(angle), 0, math.cos(angle), 1],
+            [0, 0, 0, 1],
+        ])
+        for index, vertices in enumerate(vertexes):
+            rotated = np.array(vertices).reshape(4, 3)
+            rotated = np.column_stack((rotated, np.ones(4))) @ rotation
+            vertexes[index] = tuple(
+                value
+                for point in rotated
+                for value in (point[0] + kx, point[1] + ky, point[2] + kz)
+            )
+
+        name = entry[1]
+        tex_coords = ('t2f', (0, 0, 1, 0, 1, 1, 0, 1))
+        block = self.gl.block.get(name)
+        if block is not None and name != "torch":
+            self.gl.stuffBatch.add(4, GL_QUADS, block[4], ('v3f', vertexes[0]), tex_coords)
+            if entry[5]:
+                for face, texture in zip(vertexes[1:], (block[5], block[0], block[1], block[2], block[3])):
+                    self.gl.stuffBatch.add(4, GL_QUADS, texture, ('v3f', face), tex_coords)
+            return
+
+        item = self.gl.texture.get(name)
+        if item is not None:
+            self.gl.stuffBatch.add(4, GL_QUADS, item, ('v3f', vertexes[0]), tex_coords)
 
     def _update_physics(self, entry, dt):
         x, y, z = entry[0]

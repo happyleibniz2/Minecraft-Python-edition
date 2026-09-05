@@ -1,6 +1,7 @@
 from random import randint
 
 import pygame
+import settings
 
 
 class Sound:
@@ -14,7 +15,7 @@ class Sound:
 
         self.musicPlayer = pygame.mixer.music
 
-        self.volume = 1
+        self.volume = settings.SOUND_VOLUME
 
     def initMusic(self, t):
         self.musicPlayer.stop()

@@ -36,8 +36,10 @@ class CubeHandler:
 
         # Render chunks
         self.render_chunks = {}
-        self.RENDER_CHUNK_SIZE = (16, 16, 16)
-        self.max_rebuilds_per_frame = 2
+        self.RENDER_CHUNK_SIZE = (16, 8, 16)
+        self.max_rebuilds_per_frame = 1
+        self.rebuild_cube_budget = 256
+        self.rebuild_time_budget = 0.004
 
         # Frustum culling (kept but disabled)
         self.frustum = Frustum()
@@ -103,6 +105,9 @@ class CubeHandler:
             self._schedule_adjacent_water(p)
         if t == "torch" and getattr(self.gl, "light", None) is not None:
             self.gl.light.addLightSource(*p)
+        mod_loader = getattr(self.gl, "mod_loader", None)
+        if mod_loader is not None:
+            mod_loader.post("block_added", scene=self.gl, position=p, block=cube)
         return True
 
     def remove(self, p):
@@ -126,6 +131,9 @@ class CubeHandler:
         self._mark_boundary_chunks_dirty(p, chunk_key)
         if was_water or cube.name != "water":
             self._schedule_adjacent_water(p)
+        mod_loader = getattr(self.gl, "mod_loader", None)
+        if mod_loader is not None:
+            mod_loader.post("block_removed", scene=self.gl, position=p, block=cube)
 
         # standing torches break when their supporting block disappears
         above = (p[0], p[1] + 1, p[2])
@@ -309,7 +317,7 @@ class CubeHandler:
         for position in positions:
             chunk = self.render_chunks.get(self._get_chunk_key(position))
             if chunk is not None:
-                chunk.dirty = True
+                chunk.mark_dirty()
 
     def get_water_height(self, p):
         state = self.fluids.get(p)
@@ -386,8 +394,12 @@ class CubeHandler:
         seed = getattr(self.gl.worldGen, "seed", None)
         key = (seed, x, z)
         if key not in self.biome_cache:
-            temperature = self.gl.worldGen.perlinBiomes(x, z) * 3
-            self.biome_cache[key] = Biomes(getBiomeByTemp(temperature))
+            sample_biome = getattr(self.gl.worldGen, "sample_biome", None)
+            if sample_biome is not None:
+                biome_name = sample_biome(x, z)
+            else:
+                biome_name = getBiomeByTemp(self.gl.worldGen.perlinBiomes(x, z) * 3)
+            self.biome_cache[key] = Biomes(biome_name)
         return self.biome_cache[key]
 
     # Minecraft tints only the grass top face; sides and bottom keep dirt tones.
@@ -490,7 +502,7 @@ class CubeHandler:
         for key in neighbours:
             chunk = self.render_chunks.get(key)
             if chunk is not None:
-                chunk.dirty = True
+                chunk.mark_dirty()
 
     def updateCube(self, cube, customColor=None):
         # No‑op – we use chunk rebuilds
@@ -499,25 +511,21 @@ class CubeHandler:
     def show(self, v, t, i, clrC=None):
         return None
 
-    def rebuild_dirty_chunks(self, player_pos, render_distance=None):
+    def rebuild_dirty_chunks(self, player_pos, render_distance=None,
+                             max_rebuilds=None, cube_budget=None, time_budget=None):
         if render_distance is None:
             render_distance = settings.CHUNKS_RENDER_DISTANCE
+        if max_rebuilds is None:
+            max_rebuilds = self.max_rebuilds_per_frame
+        if cube_budget is None:
+            cube_budget = self.rebuild_cube_budget
+        if time_budget is None:
+            time_budget = self.rebuild_time_budget
 
-        dirty = [chunk for chunk in self.render_chunks.values() if chunk.dirty]
+        dirty = [chunk for chunk in self.chunks_within_distance(player_pos, render_distance)
+                 if chunk.dirty]
         if not dirty:
             return
-
-        # Only filter by distance if culling is enabled
-        if settings.DISTANCE_CULLING:
-            def within_distance(chunk):
-                cx = chunk.cx * self.RENDER_CHUNK_SIZE[0] + self.RENDER_CHUNK_SIZE[0]//2
-                cy = chunk.cy * self.RENDER_CHUNK_SIZE[1] + self.RENDER_CHUNK_SIZE[1]//2
-                cz = chunk.cz * self.RENDER_CHUNK_SIZE[2] + self.RENDER_CHUNK_SIZE[2]//2
-                dx = cx - player_pos[0]
-                dy = cy - player_pos[1]
-                dz = cz - player_pos[2]
-                return dx*dx + dy*dy + dz*dz < render_distance*render_distance
-            dirty = [c for c in dirty if within_distance(c)]
 
         def priority(chunk):
             cx = chunk.cx * self.RENDER_CHUNK_SIZE[0] + self.RENDER_CHUNK_SIZE[0]//2
@@ -526,11 +534,34 @@ class CubeHandler:
             dx = cx - player_pos[0]
             dy = cy - player_pos[1]
             dz = cz - player_pos[2]
-            return dx*dx + dy*dy + dz*dz
+            distance = dx*dx + dy*dy + dz*dz
+            return (chunk._rebuild_items is None, distance)
 
         dirty.sort(key=priority)
-        for chunk in dirty[:self.max_rebuilds_per_frame]:
-            chunk.rebuild()
+        for chunk in dirty[:max_rebuilds]:
+            adaptive_budget = cube_budget * min(4, 1 << chunk.rebuild_restarts)
+            adaptive_time = (0 if time_budget <= 0 else
+                             time_budget * min(2, 1 + chunk.rebuild_restarts))
+            chunk.rebuild_step(adaptive_budget, adaptive_time)
+
+    def chunks_within_distance(self, player_pos, render_distance=None):
+        """Return the exact render-section set eligible for player updates."""
+        if render_distance is None:
+            render_distance = settings.CHUNKS_RENDER_DISTANCE
+        if not settings.DISTANCE_CULLING:
+            return list(self.render_chunks.values())
+
+        result = []
+        for chunk in self.render_chunks.values():
+            cx = chunk.cx * self.RENDER_CHUNK_SIZE[0] + self.RENDER_CHUNK_SIZE[0] // 2
+            cy = chunk.cy * self.RENDER_CHUNK_SIZE[1] + self.RENDER_CHUNK_SIZE[1] // 2
+            cz = chunk.cz * self.RENDER_CHUNK_SIZE[2] + self.RENDER_CHUNK_SIZE[2] // 2
+            dx = cx - player_pos[0]
+            dy = cy - player_pos[1]
+            dz = cz - player_pos[2]
+            if dx * dx + dy * dy + dz * dz < render_distance * render_distance:
+                result.append(chunk)
+        return result
 
     def render(self, player_pos, render_distance=None):
         if render_distance is None:
@@ -597,12 +628,11 @@ class CubeHandler:
         """Render nearby opaque chunk geometry into the sun/moon depth map."""
         radius_squared = radius * radius
         for chunk in self.render_chunks.values():
-            if chunk.dirty:
-                continue
             cx = chunk.cx * self.RENDER_CHUNK_SIZE[0] + self.RENDER_CHUNK_SIZE[0] / 2
             cz = chunk.cz * self.RENDER_CHUNK_SIZE[2] + self.RENDER_CHUNK_SIZE[2] / 2
-            dx, dz = cx - center[0], cz - center[2]
-            if dx * dx + dz * dz <= radius_squared:
+            cy = chunk.cy * self.RENDER_CHUNK_SIZE[1] + self.RENDER_CHUNK_SIZE[1] / 2
+            dx, dy, dz = cx - center[0], cy - center[1], cz - center[2]
+            if dx * dx + dy * dy + dz * dz <= radius_squared:
                 chunk.render_shadow()
 
     def render_water(self):

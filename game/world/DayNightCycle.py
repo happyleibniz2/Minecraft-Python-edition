@@ -68,9 +68,11 @@ class DayNightCycle:
         day_zenith = (0.22, 0.48, 0.92)
         self.zenith_color = _mix(night_zenith, day_zenith, daylight)
 
-        x = math.cos(self.sun_angle)
+        # This is the exact orbit used by Scene.drawCelestialSky after its
+        # X-axis rotation: local +Y becomes (0, sin(a), -cos(a)).
+        x = 0.0
         y = math.sin(self.sun_angle)
-        z = -0.25
+        z = -math.cos(self.sun_angle)
         if y < 0:
             x, y, z = -x, -y, -z
         length = math.sqrt(x * x + y * y + z * z)

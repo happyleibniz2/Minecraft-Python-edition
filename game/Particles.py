@@ -1,8 +1,12 @@
+import math
 from random import choice
 from OpenGL.GL import *
 from functions import *
 
 class Particles:
+    MAX_PARTICLES = 512
+    RENDER_DISTANCE = 48
+
     def __init__(self, gl):
         self.particles = []
         self.gl = gl
@@ -15,7 +19,8 @@ class Particles:
             if not direction:
                 numbers = range(-5, 5)
 
-        for i in range(count):
+        count = min(count, self.MAX_PARTICLES - len(self.particles))
+        for i in range(max(0, count)):
             dx, dy, dz = choice(numbers), choice(numbers), choice(numbers)
             ps = randint(4, 8) / 1000
             self.particles.append([list(p), cubeClass, randint(1, 4) / 10, [dx, dy, dz], .001, direction, 0.02, ps])
@@ -24,9 +29,17 @@ class Particles:
         if not self.particles:
             return
 
-        for particle in self.particles[:]:
+        yaw = math.radians(self.gl.player.rotation[1])
+        pitch = math.radians(self.gl.player.rotation[0])
+        right = (math.cos(yaw), 0.0, math.sin(yaw))
+        up = (-math.sin(yaw) * math.sin(pitch),
+              math.cos(pitch),
+              math.cos(yaw) * math.sin(pitch))
+        player = self.gl.player.position
+        alive = []
+
+        for particle in self.particles:
             if particle[2] <= 0:
-                self.particles.remove(particle)
                 continue
 
             if particle[5] != "no":
@@ -58,15 +71,27 @@ class Particles:
                 particle[0][0] += (particle[3][0] / 50) * dt * 60
                 particle[0][2] += (particle[3][2] / 50) * dt * 60
 
-            x, y, z = tuple(particle[0])
-            X, Y, Z = x + particle[2], y + particle[2], z + particle[2]
-
-            tex_coords = ('t2f', (0, 0, 1, 0, 1, 1, 0, 1))
-            self.gl.stuffBatch.add(4, GL_QUADS, particle[1].t[4], ('v3f', (X, y, z, x, y, z, x, Y, z, X, Y, z)), tex_coords)
-            self.gl.stuffBatch.add(4, GL_QUADS, particle[1].t[5], ('v3f', (x, y, Z, X, y, Z, X, Y, Z, x, Y, Z)), tex_coords)
-            self.gl.stuffBatch.add(4, GL_QUADS, particle[1].t[0], ('v3f', (x, y, z, x, y, Z, x, Y, Z, x, Y, z)), tex_coords)
-            self.gl.stuffBatch.add(4, GL_QUADS, particle[1].t[1], ('v3f', (X, y, Z, X, y, z, X, Y, z, X, Y, Z)), tex_coords)
-            self.gl.stuffBatch.add(4, GL_QUADS, particle[1].t[2], ('v3f', (x, y, z, X, y, z, X, y, Z, x, y, Z)), tex_coords)
-            self.gl.stuffBatch.add(4, GL_QUADS, particle[1].t[3], ('v3f', (x, Y, Z, X, Y, Z, X, Y, z, x, Y, z)), tex_coords)
-
             particle[2] -= 0.009 * dt * 60
+            if particle[2] <= 0:
+                continue
+            alive.append(particle)
+
+            x, y, z = particle[0]
+            dx, dy, dz = x - player[0], y - player[1], z - player[2]
+            if dx * dx + dy * dy + dz * dz > self.RENDER_DISTANCE ** 2:
+                continue
+
+            size = particle[2]
+            rx, ry, rz = (component * size for component in right)
+            ux, uy, uz = (component * size for component in up)
+            vertices = (
+                x - rx - ux, y - ry - uy, z - rz - uz,
+                x + rx - ux, y + ry - uy, z + rz - uz,
+                x + rx + ux, y + ry + uy, z + rz + uz,
+                x - rx + ux, y - ry + uy, z - rz + uz,
+            )
+            tex_coords = ('t2f', (0, 0, 1, 0, 1, 1, 0, 1))
+            self.gl.stuffBatch.add(4, GL_QUADS, particle[1].t[4],
+                                   ('v3f', vertices), tex_coords)
+
+        self.particles = alive

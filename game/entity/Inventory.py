@@ -260,6 +260,10 @@ class Inventory:
         return self.giveItem(name, count)
 
     def draw(self):
+        # Modal inventory/crafting windows draw their own slots. Drawing the
+        # HUD hotbar as well made every item appear twice in the same area.
+        if not self.gl.allowEvents.get("showCrosshair", True):
+            return
         inventory = self.gl.gui.GUI_TEXTURES["inventory"]
         sel_inventory = self.gl.gui.GUI_TEXTURES["sel_inventory"]
 
@@ -282,9 +286,12 @@ class Inventory:
                 self.blocksLabel[i].text = str(self.inventory[i][1])
                 self.blocksLabel[i].draw()
 
+        if self.gl.player.is_spectator:
+            return
+
         for i in range(10):
             ay = 0
-            if self.gl.player.hp <= 6:
+            if self.gl.player.hp <= 4:
                 ay = self.heartAnimation[i][0]
                 if self.heartAnimation[i][1] == "-":
                     self.heartAnimation[i][0] -= self.heartAnimation[i][2]
@@ -296,15 +303,15 @@ class Inventory:
                 elif self.heartAnimation[i][0] < -1:
                     self.heartAnimation[i][1] = "+"
 
-            heartbg.blit((self.gl.WIDTH // 2 - (inventory.width // 2)) + ((heartbg.width - 1) * i),
-                         inventory.height + 10 + ay)
+            heartbg.blit((self.gl.WIDTH // 2 - (inventory.width // 2)) + ((heartbg.width - 2) * i),
+                          inventory.height + 10 + ay)
 
         cntr = 0
         ch = 0
         x = (self.gl.WIDTH // 2 - (inventory.width // 2)) + 2
-        for i in range(self.gl.player.hp):
+        for i in range(math.ceil(max(0, self.gl.player.hp))):
             ay = 0
-            if self.gl.player.hp <= 6:
+            if self.gl.player.hp <= 4:
                 ay = self.heartAnimation[ch][0]
 
             if cntr == 0:
@@ -317,5 +324,5 @@ class Inventory:
             hrt.blit(x, inventory.height + 12 + ay)
 
             if hrt == fullheart:
-                x += heartbg.width - 1
+                x += heartbg.width - 2
                 ch += 1

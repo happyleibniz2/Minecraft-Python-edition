@@ -1,5 +1,9 @@
 {
   "shaders": true,
   "player_shadows": true,
-  "leaves_sway": true
+  "leaves_sway": true,
+  "shadow_quality": "HIGH",
+  "anti_aliasing": true,
+  "dynamic_lighting": true,
+  "difficulty": "NORMAL"
 }

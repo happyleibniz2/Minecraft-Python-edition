@@ -13,6 +13,7 @@ class Entity:
         self.hurt_cooldown = 0.0
         self.width = 0.6
         self.height = 1.8
+        self.pick_radius = 0.1
         self.dy = 0
         print("doing some buggy things in the Entity class...")
         self.position = [0, 100, 0]
@@ -103,7 +104,9 @@ class Entity:
         self.canShake = self.position[1] == col[1]
         if self.position[0] != col[0] or self.position[2] != col[2]:
             if col2 in self.gl.cubes.cubes and self.shift <= 0:
-                self.gl.blockSound.playStepSound(self.gl.cubes.cubes[col2].name, custom=15)
+                self.gl.blockSound.playStepSound(
+                    self.gl.cubes.cubes[col2].name, custom=15, position=self.position
+                )
         if not self.bInAir:
             for i in range(1, 6):
                 col21 = roundPos((col[0], col[1] - i, col[2]))

@@ -59,9 +59,11 @@ uniform float gameTime;
 uniform sampler2D shadowMap;
 uniform int shadowsEnabled;
 uniform vec2 shadowTexel;
+uniform int shadowQuality;
 uniform vec2 cloudOffset;
 uniform float cloudCoverage;
 uniform float weatherStrength;
+uniform float dynamicLighting;
 varying vec4 vertexColor;
 varying float torchLight;
 varying float fogDistance;
@@ -83,13 +85,9 @@ float noise21(vec2 p) {
 }
 
 float cloudNoise(vec2 p) {
-    float value = 0.0;
-    float amplitude = 0.55;
-    for (int i = 0; i < 4; ++i) {
-        value += noise21(p) * amplitude;
-        p = p * 2.03 + vec2(19.1, 7.7);
-        amplitude *= 0.5;
-    }
+    float value = noise21(p) * 0.67;
+    p = p * 2.03 + vec2(19.1, 7.7);
+    value += noise21(p) * 0.33;
     return value;
 }
 
@@ -104,16 +102,23 @@ float realtimeShadow() {
         return 1.0;
     }
 
-    float lit = 0.0;
     float bias = 0.0018;
-    for (int x = -1; x <= 1; ++x) {
-        for (int y = -1; y <= 1; ++y) {
-            float depth = texture2D(shadowMap,
-                projected.xy + vec2(float(x), float(y)) * shadowTexel).r;
-            lit += projected.z - bias <= depth ? 1.0 : 0.0;
-        }
+    float centerDepth = texture2D(shadowMap, projected.xy).r;
+    float lit = projected.z - bias <= centerDepth ? 1.0 : 0.0;
+    if (shadowQuality > 0) {
+        float spread = shadowQuality == 1 ? 0.85 : 1.45;
+        vec2 offset = shadowTexel * spread;
+        float d0 = texture2D(shadowMap, projected.xy + vec2(-offset.x, -offset.y)).r;
+        float d1 = texture2D(shadowMap, projected.xy + vec2( offset.x, -offset.y)).r;
+        float d2 = texture2D(shadowMap, projected.xy + vec2(-offset.x,  offset.y)).r;
+        float d3 = texture2D(shadowMap, projected.xy + vec2( offset.x,  offset.y)).r;
+        lit += projected.z - bias <= d0 ? 1.0 : 0.0;
+        lit += projected.z - bias <= d1 ? 1.0 : 0.0;
+        lit += projected.z - bias <= d2 ? 1.0 : 0.0;
+        lit += projected.z - bias <= d3 ? 1.0 : 0.0;
+        lit /= 5.0;
     }
-    return mix(0.38, 1.0, lit / 9.0);
+    return mix(0.38, 1.0, lit);
 }
 
 void main() {
@@ -128,7 +133,8 @@ void main() {
     // Smooth warm torch light with a subtle non-disruptive flame flicker.
     float flicker = 0.975 + 0.025 * sin(gameTime * 8.0
                      + worldPosition.x * 1.7 + worldPosition.z * 2.3);
-    vec3 torchColor = vec3(1.18, 0.73, 0.38) * torchLight * flicker;
+    float activeTorchLight = torchLight * dynamicLighting;
+    vec3 torchColor = vec3(1.18, 0.73, 0.38) * activeTorchLight * flicker;
     vec3 illumination = max(skylight, torchColor);
 
     float sunShadowStrength = dayAmount * 0.82 * (1.0 - weatherStrength * 0.72);
@@ -159,13 +165,18 @@ void main() {
 
 class Light:
     TORCH_RADIUS = 15.0
+    LIGHT_CELL_SIZE = 16
+    SHADOW_QUALITY_SIZES = {"LOW": 512, "MEDIUM": 1024, "HIGH": 2048}
     SHADOW_SIZE = 1024
     SHADOW_RADIUS = 48.0
 
     def __init__(self, gl):
         self.gl = gl
         self.enabled = settings.SHADERS
+        self.SHADOW_SIZE = self.SHADOW_QUALITY_SIZES[settings.SHADOW_QUALITY]
         self.lightSources = set()
+        self._light_columns = {}
+        self._vertex_light_cache = {}
         self.sky_brightness = 1.0
         self.shader = None
         self.sky_uniform = None
@@ -179,9 +190,11 @@ class Light:
         self.shadow_sampler_uniform = None
         self.shadows_enabled_uniform = None
         self.shadow_texel_uniform = None
+        self.shadow_quality_uniform = None
         self.cloud_offset_uniform = None
         self.cloud_coverage_uniform = None
         self.weather_uniform = None
+        self.dynamic_lighting_uniform = None
         self.leaves_sway_uniform = None
         self.sway_attribute_location = -1
         self.fog_color = (0.5, 0.7, 1.0)
@@ -196,6 +209,9 @@ class Light:
         self.shadow_matrix = np.identity(4, dtype=np.float32)
         self.shadow_ready = False
         self._saved_viewport = None
+        self.last_shadow_time = -999.0
+        self.last_shadow_center = None
+        self.last_shadow_direction = None
 
     def initialize(self):
         """Compile the GLSL 1.20 compatibility shader, with safe fallback."""
@@ -217,9 +233,11 @@ class Light:
             self.shadow_sampler_uniform = glGetUniformLocation(self.shader, "shadowMap")
             self.shadows_enabled_uniform = glGetUniformLocation(self.shader, "shadowsEnabled")
             self.shadow_texel_uniform = glGetUniformLocation(self.shader, "shadowTexel")
+            self.shadow_quality_uniform = glGetUniformLocation(self.shader, "shadowQuality")
             self.cloud_offset_uniform = glGetUniformLocation(self.shader, "cloudOffset")
             self.cloud_coverage_uniform = glGetUniformLocation(self.shader, "cloudCoverage")
             self.weather_uniform = glGetUniformLocation(self.shader, "weatherStrength")
+            self.dynamic_lighting_uniform = glGetUniformLocation(self.shader, "dynamicLighting")
             self.leaves_sway_uniform = glGetUniformLocation(self.shader, "leavesSway")
             self.sway_attribute_location = glGetAttribLocation(self.shader, "swayWeight")
             self._initialize_shadow_map()
@@ -234,6 +252,9 @@ class Light:
         if source in self.lightSources:
             return
         self.lightSources.add(source)
+        cell = (source[0] // self.LIGHT_CELL_SIZE, source[2] // self.LIGHT_CELL_SIZE)
+        self._light_columns.setdefault(cell, set()).add(source)
+        self._vertex_light_cache.clear()
         self._dirty_light_region(source)
 
     def removeLightSource(self, x, y, z):
@@ -241,6 +262,13 @@ class Light:
         if source not in self.lightSources:
             return
         self.lightSources.remove(source)
+        cell = (source[0] // self.LIGHT_CELL_SIZE, source[2] // self.LIGHT_CELL_SIZE)
+        column = self._light_columns.get(cell)
+        if column is not None:
+            column.discard(source)
+            if not column:
+                del self._light_columns[cell]
+        self._vertex_light_cache.clear()
         self._dirty_light_region(source)
 
     def set_sky_brightness(self, brightness):
@@ -252,6 +280,18 @@ class Light:
             glUseProgram(0)
         elif self.shader is None:
             self.initialize()
+
+    def set_shadow_quality(self, quality):
+        quality = str(quality).upper()
+        size = self.SHADOW_QUALITY_SIZES.get(quality, 1024)
+        if size == self.SHADOW_SIZE and self.shadow_texture:
+            return
+        self.SHADOW_SIZE = size
+        self.shadow_ready = False
+        self.last_shadow_time = -999.0
+        self._delete_shadow_map()
+        if self.shader:
+            self._initialize_shadow_map()
 
     def set_environment(self, fog_color, fog_start, fog_end):
         self.fog_color = tuple(float(component) for component in fog_color[:3])
@@ -269,17 +309,68 @@ class Light:
         """Smooth torch light at a vertex, 15 down to 0 over 15 blocks."""
         if not self.lightSources:
             return 0.0
-        x, y, z = vertex
+        key = tuple(vertex)
+        cached = self._vertex_light_cache.get(key)
+        if cached is not None:
+            return cached
+        light = self._calculate_vertex_light(*key)
+        if len(self._vertex_light_cache) >= 65536:
+            self._vertex_light_cache.clear()
+        self._vertex_light_cache[key] = light
+        return light
+
+    def _calculate_vertex_light(self, x, y, z):
         brightest = 0.0
-        for lx, ly, lz in self.lightSources:
-            dx = x - lx
-            dy = y - (ly + 0.35)
-            dz = z - lz
-            distance = math.sqrt(dx * dx + dy * dy + dz * dz)
-            light = 1.0 - distance / self.TORCH_RADIUS
-            if light > brightest:
-                brightest = light
+        cell_x = math.floor(x / self.LIGHT_CELL_SIZE)
+        cell_z = math.floor(z / self.LIGHT_CELL_SIZE)
+        for offset_x in (-1, 0, 1):
+            for offset_z in (-1, 0, 1):
+                for lx, ly, lz in self._light_columns.get((cell_x + offset_x, cell_z + offset_z), ()):
+                    dx = x - lx
+                    dy = y - (ly + 0.35)
+                    dz = z - lz
+                    distance_squared = dx * dx + dy * dy + dz * dz
+                    if distance_squared >= self.TORCH_RADIUS * self.TORCH_RADIUS:
+                        continue
+                    light = 1.0 - math.sqrt(distance_squared) / self.TORCH_RADIUS
+                    if light > brightest:
+                        brightest = light
         return max(0.0, min(1.0, brightest))
+
+    def close(self):
+        """Release caches and shadow-map resources before a world reset."""
+        self._vertex_light_cache.clear()
+        resources = (
+            (self.shadow_fbo, lambda value: glDeleteFramebuffers(1, [value])),
+            (self.shadow_texture, lambda value: glDeleteTextures([value])),
+            (self.shader, glDeleteProgram),
+        )
+        for resource, delete in resources:
+            if not resource:
+                continue
+            try:
+                delete(resource)
+            except Exception as error:
+                print(f"Warning: could not release lighting resource ({error})")
+        self.shadow_fbo = 0
+        self.shadow_texture = 0
+        self.shadow_ready = False
+        self.shader = 0
+
+    def _delete_shadow_map(self):
+        if self.shadow_fbo:
+            try:
+                glDeleteFramebuffers(1, [self.shadow_fbo])
+            except Exception:
+                pass
+        if self.shadow_texture:
+            try:
+                glDeleteTextures([self.shadow_texture])
+            except Exception:
+                pass
+        self.shadow_fbo = 0
+        self.shadow_texture = 0
+        self.shadow_ready = False
 
     def texture_coordinates(self, face_vertices, cube=None):
         """UV plus per-vertex torch light encoded in texture-coordinate Z."""
@@ -332,9 +423,12 @@ class Light:
         glUniformMatrix4fv(self.shadow_matrix_uniform, 1, GL_TRUE, self.shadow_matrix)
         glUniform1i(self.shadows_enabled_uniform, 1 if self.shadow_ready else 0)
         glUniform2f(self.shadow_texel_uniform, 1.0 / self.SHADOW_SIZE, 1.0 / self.SHADOW_SIZE)
+        quality_index = 0 if self.SHADOW_SIZE <= 512 else 1 if self.SHADOW_SIZE <= 1024 else 2
+        glUniform1i(self.shadow_quality_uniform, quality_index)
         glUniform2f(self.cloud_offset_uniform, *self.cloud_offset)
         glUniform1f(self.cloud_coverage_uniform, self.cloud_coverage)
         glUniform1f(self.weather_uniform, self.weather_strength)
+        glUniform1f(self.dynamic_lighting_uniform, 1.0 if settings.DYNAMIC_LIGHTING else 0.0)
         glUniform1f(self.leaves_sway_uniform, 1.0 if settings.LEAVES_SWAY else 0.0)
 
         if self.shadow_ready:
@@ -395,6 +489,32 @@ class Light:
         self.shadow_ready = True
         return True
 
+    def should_update_shadow(self, center, light_direction):
+        """Update shadows at a quality-dependent rate or after meaningful movement."""
+        if not self.enabled or not self.shadow_texture:
+            return False
+        if not self.shadow_ready:
+            should_update = True
+        else:
+            rate = {512: 4.0, 1024: 6.0, 2048: 8.0}.get(self.SHADOW_SIZE, 6.0)
+            interval = 1.0 / rate
+            should_update = self.elapsed - self.last_shadow_time >= interval
+
+        center = tuple(float(value) for value in center)
+        direction = tuple(float(value) for value in light_direction)
+        if self.last_shadow_center is not None:
+            moved = sum((center[i] - self.last_shadow_center[i]) ** 2 for i in range(3))
+            should_update = should_update or moved >= 4.0
+        if self.last_shadow_direction is not None:
+            changed = sum((direction[i] - self.last_shadow_direction[i]) ** 2 for i in range(3))
+            should_update = should_update or changed >= 0.0004
+
+        if should_update:
+            self.last_shadow_time = self.elapsed
+            self.last_shadow_center = center
+            self.last_shadow_direction = direction
+        return should_update
+
     def end_shadow_pass(self):
         glMatrixMode(GL_MODELVIEW)
         glPopMatrix()
@@ -427,13 +547,13 @@ class Light:
             glDrawBuffer(GL_NONE)
             glReadBuffer(GL_NONE)
             complete = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE
-            glBindFramebuffer(GL_FRAMEBUFFER, 0)
             if not complete:
                 raise RuntimeError("depth framebuffer is incomplete")
         except Exception as error:
             print(f"Warning: real-time shadows unavailable ({error})")
-            self.shadow_fbo = 0
-            self.shadow_texture = 0
+            self._delete_shadow_map()
+        finally:
+            glBindFramebuffer(GL_FRAMEBUFFER, 0)
 
     @staticmethod
     def _matrix(which):
@@ -454,4 +574,4 @@ class Light:
                 for cz in range(min_chunk[2], max_chunk[2] + 1):
                     chunk = cubes.render_chunks.get((cx, cy, cz))
                     if chunk is not None:
-                        chunk.dirty = True
+                        chunk.mark_dirty()

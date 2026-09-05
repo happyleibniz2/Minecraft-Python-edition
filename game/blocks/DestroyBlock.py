@@ -33,7 +33,7 @@ class DestroyBlock:
         "bedrock": None,
         "water": None,
         "lava": None,
-        "debug": None,
+        "debug": 1.0,
     }
     TOOL_REQUIRED = {
         "stone", "cobblestone", "brick", "sandstone", "glowstone",
@@ -112,7 +112,7 @@ class DestroyBlock:
                     self.gl.droppedBlock.addBlock(blockByVec[0], cube.name)
 
             self._damage_tool(held)
-            self.gl.blockSound.playBlockSound(cube.name)
+            self.gl.blockSound.playBlockSound(cube.name, position=cube.p)
             self.gl.particles.addParticle(cube.p, cube, direction="down")
             self.gl.cubes.remove(blockByVec[0])
 

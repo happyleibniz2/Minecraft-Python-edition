@@ -12,6 +12,10 @@ class Player:
     WALK_SPEED = 4.317
     SPRINT_MULTIPLIER = 1.3
     SNEAK_MULTIPLIER = 0.3
+    WIDTH = 0.6
+    HEIGHT = 1.8
+    FEET_OFFSET = PLAYER_EYE_HEIGHT
+    JUMP_VELOCITY = 3.8
 
     def __init__(self, x=0, y=0, z=0, rotation=None, gl=None):
         if rotation is None:
@@ -36,6 +40,14 @@ class Player:
         self._mouse_dx = 0.0
         self._mouse_dy = 0.0
         self.attack_cooldown = 999.0
+        self.hurt_cooldown = 0.0
+        self.last_damage = 0.0
+        self.hurt_time = 0.0
+        self.spawn_protection = 3.0
+        self.fall_distance = 0.0
+        self.velocity_x = 0.0
+        self.velocity_z = 0.0
+        self.hand_swing = 0.0
         self.hp = -1
         self.bInAir = False
         self.playerDead = False
@@ -45,6 +57,39 @@ class Player:
         self.playerFallY = 0
 
         self.gl.allowEvents["collisions"] = True
+
+    def reset_for_world(self, position=(0, -90, 0)):
+        """Clear state that must not leak from one world into the next."""
+        self.position = list(position)
+        self.rotation = [0, 0]
+        self.is_spectator = False
+        self.in_water = False
+        self.speed = self.WALK_SPEED
+        self.dy = 0
+        self.shift = 0
+        self.cameraShake = [0, False]
+        self.canShake = True
+        self.lastShiftPos = self.position.copy()
+        self.cameraType = 1
+        self.is_sprinting = False
+        self._mouse_dx = 0.0
+        self._mouse_dy = 0.0
+        self.attack_cooldown = 999.0
+        self.hurt_cooldown = 0.0
+        self.last_damage = 0.0
+        self.hurt_time = 0.0
+        self.spawn_protection = 3.0
+        self.fall_distance = 0.0
+        self.velocity_x = 0.0
+        self.velocity_z = 0.0
+        self.hand_swing = 0.0
+        self.hp = -1
+        self.bInAir = False
+        self.playerDead = False
+        self.lastPlayerPosOnGround = self.position.copy()
+        self.playerFallY = 0
+        self.gl.allowEvents["collisions"] = True
+        self.gl.fov = FOV
 
     @staticmethod
     def get_physics_dt():
@@ -82,6 +127,8 @@ class Player:
 
     def updatePosition(self, dt):
         self.attack_cooldown += max(0.0, dt)
+        self.hand_swing = max(0.0, self.hand_swing - max(0.0, dt) * 3.5)
+        self._tick_damage(dt)
         if not self.gl.allowEvents["movePlayer"]:
             self.clear_look()
             self.is_sprinting = False
@@ -110,12 +157,42 @@ class Player:
             move_speed *= 0.5
 
         rot_y = math.radians(self.rotation[1])
-        dx = (forward * math.sin(rot_y) + strafe * math.cos(rot_y)) * move_speed * dt
-        dz = (-forward * math.cos(rot_y) + strafe * math.sin(rot_y)) * move_speed * dt
+        direction_x = forward * math.sin(rot_y) + strafe * math.cos(rot_y)
+        direction_z = -forward * math.cos(rot_y) + strafe * math.sin(rot_y)
+        desired_x = direction_x * move_speed
+        desired_z = direction_z * move_speed
+        grounded = self.dy <= 0 and self._has_support(
+            self.position[0], self.position[1], self.position[2])
+
+        if self.is_spectator or grounded:
+            self.velocity_x = desired_x
+            self.velocity_z = desired_z
+        elif self.in_water:
+            self.velocity_x = desired_x
+            self.velocity_z = desired_z
+        else:
+            # Minecraft air control: retain momentum, add only a small input
+            # acceleration, then apply the per-tick 0.91 horizontal drag.
+            air_acceleration = 8.0
+            self.velocity_x += direction_x * air_acceleration * dt
+            self.velocity_z += direction_z * air_acceleration * dt
+            drag = 0.91 ** (dt * 20)
+            self.velocity_x *= drag
+            self.velocity_z *= drag
+            speed = math.hypot(self.velocity_x, self.velocity_z)
+            max_air_speed = self.speed * self.SPRINT_MULTIPLIER
+            if speed > max_air_speed and speed > 0:
+                scale = max_air_speed / speed
+                self.velocity_x *= scale
+                self.velocity_z *= scale
+
         if self.in_water and not self.is_spectator:
             current_x, current_z = self.gl.cubes.get_water_current(self.position)
-            dx += current_x * 1.39 * dt
-            dz += current_z * 1.39 * dt
+            self.velocity_x += current_x * 1.39
+            self.velocity_z += current_z * 1.39
+
+        dx = self.velocity_x * dt
+        dz = self.velocity_z * dt
 
         if self.is_spectator:
             vertical = int(key[pygame.K_SPACE]) - int(key[pygame.K_LSHIFT])
@@ -127,6 +204,8 @@ class Player:
             # flying is not falling; clear fall state so leaving spectator
             # never applies phantom fall damage
             self.dy = 0
+            self.velocity_x = desired_x
+            self.velocity_z = desired_z
             self.playerFallY = 0
             self.bInAir = False
             self.lastPlayerPosOnGround = list(self.position)
@@ -161,13 +240,22 @@ class Player:
                 self.dy = 0
                 self.bInAir = False
 
-        moved = abs(self.position[0] - start_x) > 1e-6 or abs(self.position[2] - start_z) > 1e-6
+        actual_x = self.position[0] - start_x
+        actual_z = self.position[2] - start_z
+        if abs(dx) > 1e-6 and abs(actual_x) < abs(dx) * 0.5:
+            self.velocity_x = 0.0
+        if abs(dz) > 1e-6 and abs(actual_z) < abs(dz) * 0.5:
+            self.velocity_z = 0.0
+        moved = abs(actual_x) > 1e-6 or abs(actual_z) > 1e-6
         self.is_sprinting = sprinting and moved
         if moved and not self.is_spectator and not self.in_water:
             self.setCameraShake(dt)
-            ground = roundPos((self.position[0], self.position[1] - 2, self.position[2]))
+            ground = roundPos((self.position[0],
+                               self.position[1] - self.FEET_OFFSET - 0.5,
+                               self.position[2]))
             if ground in self.gl.cubes.cubes and not sneaking:
-                self.gl.blockSound.playStepSound(self.gl.cubes.cubes[ground].name, custom=15)
+                self.gl.blockSound.playStepSound(self.gl.cubes.cubes[ground].name,
+                                                 custom=15, position=self.position)
         self._update_fov(dt)
 
     def queue_look(self, dx, dy):
@@ -194,6 +282,60 @@ class Player:
         target_fov = FOV + 10 if self.is_sprinting else FOV
         blend = 1 - math.exp(-10 * dt)
         self.gl.fov += (target_fov - self.gl.fov) * blend
+
+    def _tick_damage(self, dt):
+        previous = self.hurt_cooldown
+        self.hurt_cooldown = max(0.0, self.hurt_cooldown - max(0.0, dt))
+        self.hurt_time = max(0.0, self.hurt_time - max(0.0, dt))
+        self.spawn_protection = max(0.0, getattr(self, "spawn_protection", 0.0) - max(0.0, dt))
+        if previous > 0 and self.hurt_cooldown == 0:
+            self.last_damage = 0.0
+
+    def hurt(self, amount, source="generic", attacker=None):
+        """Minecraft-style damage with ten ticks of invulnerability."""
+        source = str(source)
+        if ((self.is_spectator and source != "void") or self.playerDead or self.hp <= 0
+                or (getattr(self, "spawn_protection", 0.0) > 0 and source != "void")):
+            return False
+        amount = max(0.0, float(amount))
+        if amount <= 0:
+            return False
+
+        if self.hurt_cooldown > 0:
+            if amount <= self.last_damage:
+                return False
+            applied = amount - self.last_damage
+            self.last_damage = amount
+            self.hp = max(0, self.hp - applied)
+            if float(self.hp).is_integer():
+                self.hp = int(self.hp)
+            if self.hp <= 0:
+                self.dead()
+            return True
+        else:
+            applied = amount
+
+        self.last_damage = amount
+        self.hurt_cooldown = 0.5
+        self.hurt_time = 0.5
+        self.cameraShake[0] = -0.08
+        self.hp = max(0, self.hp - applied)
+        if float(self.hp).is_integer():
+            self.hp = int(self.hp)
+
+        if attacker is not None:
+            dx = self.position[0] - attacker.position[0]
+            dz = self.position[2] - attacker.position[2]
+            distance = math.hypot(dx, dz)
+            if distance > 1e-6:
+                self.velocity_x += dx / distance * 2.6
+                self.velocity_z += dz / distance * 2.6
+                self.dy = max(self.dy, 2.0)
+
+        self.gl.blockSound.damageByBlock(source, self.hp)
+        if self.hp <= 0:
+            self.dead()
+        return True
 
     def give_debug_items(self):
         items = [
@@ -237,21 +379,78 @@ class Player:
         self.inventory.inventory[slot] = [stack[0], remaining] if remaining > 0 else ["", 0]
         return True
 
+    def renderHeldItem(self):
+        """Render the selected item/hand in first person, Minecraft-style."""
+        if (self.playerDead or self.cameraType != 1
+                or not self.gl.allowEvents.get("showCrosshair", True)):
+            return
+
+        stack = self.inventory.inventory.get(self.inventory.activeInventory, ["", 0])
+        name = stack[0] if stack[1] > 0 else ""
+        swing = math.sin((1.0 - self.hand_swing) * math.pi) if self.hand_swing > 0 else 0.0
+        bob = self.cameraShake[0] * 35
+
+        glPushAttrib(GL_ENABLE_BIT | GL_CURRENT_BIT | GL_COLOR_BUFFER_BIT)
+        glPushMatrix()
+        try:
+            glEnable(GL_BLEND)
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+            glTranslatef(self.gl.WIDTH - 74 + swing * 18, 42 - swing * 28 + bob, 0)
+            glRotatef(-24 - swing * 32, 0, 0, 1)
+            glColor4f(1, 1, 1, 1)
+
+            image = self.gl.inventory_textures.get(name)
+            if image is not None:
+                image.blit(-48, -20, width=96, height=96)
+            else:
+                # Empty-hand fallback; no player-arm texture exists yet.
+                glDisable(GL_TEXTURE_2D)
+                glColor4f(0.72, 0.47, 0.30, 1)
+                glBegin(GL_QUADS)
+                glVertex2f(-18, -55)
+                glVertex2f(30, -55)
+                glVertex2f(24, 45)
+                glVertex2f(-8, 38)
+                glEnd()
+        finally:
+            glPopMatrix()
+            glPopAttrib()
+
     def _has_support(self, x, y, z):
-        support_y = round(y - 1.75)
-        if abs(y - (support_y + 1.75)) > 0.1:
+        standing_offset = self.FEET_OFFSET + 0.5
+        support_y = round(y - standing_offset)
+        if abs(y - (support_y + standing_offset)) > 0.1:
             return False
 
-        for offset_x in (-0.24, 0.24):
-            for offset_z in (-0.24, 0.24):
+        edge = self.WIDTH / 2 - 0.01
+        for offset_x in (-edge, edge):
+            for offset_z in (-edge, edge):
                 if roundPos((x + offset_x, support_y, z + offset_z)) in self.gl.cubes.collidable:
                     return True
         return False
 
     def _is_in_water(self):
-        x, y, z = self.position
-        return (roundPos((x, y, z)) in self.gl.cubes.fluids or
-                roundPos((x, y - 1, z)) in self.gl.cubes.fluids)
+        return self._position_in_water(self.position)
+
+    def _position_in_water(self, position):
+        bounds = self._player_bounds(position)
+        ranges = [
+            range(math.floor(bounds[0][axis] - 0.5),
+                  math.ceil(bounds[1][axis] + 0.5) + 1)
+            for axis in range(3)
+        ]
+        for x in ranges[0]:
+            for y in ranges[1]:
+                for z in ranges[2]:
+                    if (x, y, z) not in self.gl.cubes.fluids:
+                        continue
+                    block_min = (x - 0.5, y - 0.5, z - 0.5)
+                    block_max = (x + 0.5, y + 0.5, z + 0.5)
+                    if all(bounds[1][axis] > block_min[axis] + 1e-9
+                           and bounds[0][axis] < block_max[axis] - 1e-9
+                           for axis in range(3)):
+                        return True
+        return False
 
     def _limit_sneak_movement(self, dx, dz):
         x, y, z = self.position
@@ -264,8 +463,9 @@ class Player:
         return 0, 0
 
     def jump(self):
-        if self._has_support(self.position[0], self.position[1], self.position[2]):
-            self.dy = 5.5
+        if (self.dy <= 0 and not getattr(self, "bInAir", False)
+                and self._has_support(self.position[0], self.position[1], self.position[2])):
+            self.dy = self.JUMP_VELOCITY
 
     def move(self, dt, dx, dy, dz):
         if self.is_spectator:
@@ -277,6 +477,7 @@ class Player:
             self.dy -= dt * self.gravity
             self.dy = max(self.dy, -self.tVel)
         dy += self.dy * dt
+        vertical_step = dy
 
         if self.dy > 19.8:
             self.dy = 19.8
@@ -286,56 +487,51 @@ class Player:
             self.position = [x + dx, y + dy, z + dz]
             return
 
-        col = self.collide((x + dx, y + dy, z + dz))
+        target = (x + dx, y + dy, z + dz)
+        col = self.collide(target)
         col2 = roundPos((col[0], col[1] - 2, col[2]))
-        self.canShake = self.position[1] == col[1]
-        if self.in_water:
+        landed = vertical_step < 0 and col[1] > target[1] + 1e-6
+        self.canShake = landed
+        water_contact = self.in_water or self._position_in_water(col)
+        if water_contact:
+            self.in_water = True
             self.bInAir = False
             self.playerFallY = 0
+            self.fall_distance = 0.0
             self.lastPlayerPosOnGround = list(col)
             self.position = list(col)
             return
-        if not self.bInAir:
-            for i in range(1, 6):
-                col21 = roundPos((col[0], col[1] - i, col[2]))
-                if col21 not in self.gl.cubes.cubes:
-                    self.bInAir = True
-                    if self.playerFallY < col[1]:
-                        self.playerFallY = round(col[1] - self.lastPlayerPosOnGround[1])
-                else:
-                    self.bInAir = False
-                    break
-        else:
-            self.lastPlayerPosOnGround = col
 
-        if self.bInAir and col2 in self.gl.cubes.cubes:
-            hp = self.hp
-            if 3 < self.playerFallY:
-                self.hp -= 1
-                if self.playerFallY < 10:
-                    self.hp -= 3
-                elif self.playerFallY < 16:
-                    self.hp -= 5
-                elif self.playerFallY < 23:
-                    self.hp -= 8
-                elif self.playerFallY < 30:
-                    self.hp -= 11
-                else:
-                    self.hp = 0
-                self.gl.blockSound.cntr = 99
-                self.gl.blockSound.damageByBlock(self.gl.cubes.cubes[col2].name, self.hp)
-            if self.hp <= 0 and not self.playerDead:
-                self.dead()
+        if vertical_step < 0 and not landed:
+            self.fall_distance += -vertical_step
+            self.playerFallY = round(self.fall_distance)
 
+        if landed:
+            impact_distance = self.fall_distance
+            damage = self.fall_damage(impact_distance)
+            if damage > 0:
+                self.hurt(damage, "fall")
+            self.fall_distance = 0.0
+            self.playerFallY = 0
             self.bInAir = False
-            self.gl.particles.addParticle((col[0], col[1] - 1, col[2]),
-                                          self.gl.cubes.cubes[col2],
-                                          direction="down",
-                                          count=10)
+            self.lastPlayerPosOnGround = list(col)
+            if impact_distance > 3.0 and col2 in self.gl.cubes.cubes:
+                particle_count = min(24, max(6, round(impact_distance * 2)))
+                self.gl.particles.addParticle((col[0], col[1] - 1, col[2]),
+                                              self.gl.cubes.cubes[col2],
+                                              direction="down", count=particle_count)
+        else:
+            self.bInAir = not self._has_support(col[0], col[1], col[2])
         self.position = list(col)
+
+    @staticmethod
+    def fall_damage(distance):
+        return math.ceil(max(0.0, float(distance) - 3.0))
 
     def dead(self):
         self.playerDead = True
+        if hasattr(self.gl.gui, "hideText"):
+            self.gl.gui.hideText()
         self.gl.deathScreen()
         # only real storage drops; the crafting grid is returned separately
         droppable = list(self.inventory.HOTBAR_SLOTS) + list(self.inventory.STORAGE_SLOTS)
@@ -355,6 +551,8 @@ class Player:
         blockByVec = self.gl.cubes.hitTest(self.position, sight)
 
         if button == 1:
+            if self.hand_swing == 0:
+                self.hand_swing = 1.0
             hit_test = getattr(self.gl, "hitTestEntity", None)
             entity = hit_test(self.position, sight, 3.0) if hit_test else None
             if entity is not None:
@@ -382,6 +580,7 @@ class Player:
                         self.gl.gui.showText(target)
                         break
         if button == 3:
+            self.hand_swing = 1.0
             if blockByVec[0] and self.shift <= 0:
                 if blockByVec[0] in self.gl.cubes.cubes:
                     if canOpenBlock(self, self.gl.cubes.cubes[blockByVec[0]], self.gl):
@@ -419,16 +618,15 @@ class Player:
                 if fluid_hit[0] in self.gl.cubes.fluids:
                     placement = fluid_hit[0]
             if placement:
-                playerPos = tuple(roundPos((self.position[0], self.position[1] - 1, self.position[2])))
-                playerPos2 = tuple(roundPos((self.position[0], self.position[1], self.position[2])))
                 blockByVec = placement[0], placement[1], placement[2]
                 held_name = self.inventory.inventory[self.inventory.activeInventory][0]
                 if held_name in self.gl.block and not is_item(held_name) and \
-                        self.inventory.inventory[self.inventory.activeInventory][1] and blockByVec != playerPos and \
-                        blockByVec != playerPos2:
+                        self.inventory.inventory[self.inventory.activeInventory][1] and \
+                        not self.intersects_block(blockByVec):
                     placed = self.gl.cubes.add(blockByVec, held_name, now=True)
                     if placed:
-                        self.gl.blockSound.playBlockSound(self.gl.cubes.cubes[blockByVec].name)
+                        self.gl.blockSound.playBlockSound(self.gl.cubes.cubes[blockByVec].name,
+                                                         position=blockByVec)
                         self.inventory.inventory[self.inventory.activeInventory][1] -= 1
 
     def attackEntity(self, entity):
@@ -448,34 +646,77 @@ class Player:
         return damaged
 
     def collide(self, pos):
-        # spectators are immune to all damage, exactly like Minecraft
-        if -90 > pos[1] > -9000 and not self.is_spectator:
-            if not self.playerDead:
-                self.hp -= 2
-                self.gl.blockSound.damageByBlock("ahh", 1)
-                if self.hp <= 0:
-                    self.dead()
+        if pos[1] < WORLD_MIN_Y - 64 and not self.playerDead:
+            self.hurt(4, "void")
 
-        p = list(pos)
-        np = roundPos(pos)
-        for face in ((-1, 0, 0), (1, 0, 0), (0, -1, 0), (0, 1, 0), (0, 0, -1), (0, 0, 1)):
-            for i in (0, 1, 2):
-                if not face[i]:
-                    continue
-                d = (p[i] - np[i]) * face[i]
-                pad = 0.25
-                if d < pad:
-                    continue
-                for dy in (0, 1):
-                    op = list(np)
-                    op[1] -= dy
-                    op[i] += face[i]
-                    if tuple(op) in self.gl.cubes.collidable:
-                        p[i] -= (d - pad) * face[i]
-                        if face[1]:
-                            self.dy = 0
-                        break
-        return tuple(p)
+        resolved = list(self.position)
+        movement = [pos[index] - resolved[index] for index in range(3)]
+        for axis in (1, 0, 2):
+            allowed = self._resolve_axis(resolved, movement[axis], axis)
+            resolved[axis] += allowed
+            if axis == 1 and abs(allowed - movement[axis]) > 1e-9:
+                self.dy = 0
+        return tuple(resolved)
+
+    def _resolve_axis(self, position, amount, axis):
+        if abs(amount) <= 1e-12:
+            return 0.0
+        bounds = self._player_bounds(position)
+        moved = position.copy()
+        moved[axis] += amount
+        moved_bounds = self._player_bounds(moved)
+        sweep_min = tuple(min(bounds[0][i], moved_bounds[0][i]) for i in range(3))
+        sweep_max = tuple(max(bounds[1][i], moved_bounds[1][i]) for i in range(3))
+        allowed = amount
+
+        ranges = [
+            range(math.floor(sweep_min[i] - 0.5), math.ceil(sweep_max[i] + 0.5) + 1)
+            for i in range(3)
+        ]
+        for block_x in ranges[0]:
+            for block_y in ranges[1]:
+                for block_z in ranges[2]:
+                    if (block_x, block_y, block_z) not in self.gl.cubes.collidable:
+                        continue
+                    block_min = (block_x - 0.5, block_y - 0.5, block_z - 0.5)
+                    block_max = (block_x + 0.5, block_y + 0.5, block_z + 0.5)
+                    if any(bounds[1][other] <= block_min[other] + 1e-9
+                           or bounds[0][other] >= block_max[other] - 1e-9
+                           for other in range(3) if other != axis):
+                        continue
+                    overlapping = (bounds[0][axis] < block_max[axis] - 1e-9
+                                   and bounds[1][axis] > block_min[axis] + 1e-9)
+                    if overlapping:
+                        block_center = (block_min[axis] + block_max[axis]) / 2
+                        moving_deeper = (abs(position[axis] + amount - block_center)
+                                         <= abs(position[axis] - block_center))
+                        if moving_deeper:
+                            allowed = 0.0
+                        continue
+                    if amount > 0 and bounds[1][axis] <= block_min[axis] + 1e-9:
+                        allowed = min(allowed, block_min[axis] - bounds[1][axis])
+                    elif amount < 0 and bounds[0][axis] >= block_max[axis] - 1e-9:
+                        allowed = max(allowed, block_max[axis] - bounds[0][axis])
+        return allowed
+
+    def intersects_block(self, block_position):
+        bounds = self._player_bounds(self.position)
+        block_min = tuple(value - 0.5 for value in block_position)
+        block_max = tuple(value + 0.5 for value in block_position)
+        return all(bounds[1][axis] > block_min[axis] + 1e-9
+                   and bounds[0][axis] < block_max[axis] - 1e-9
+                   for axis in range(3))
+
+    @classmethod
+    def _player_bounds(cls, position):
+        half_width = cls.WIDTH / 2
+        return (
+            (position[0] - half_width, position[1] - cls.FEET_OFFSET,
+             position[2] - half_width),
+            (position[0] + half_width,
+             position[1] - cls.FEET_OFFSET + cls.HEIGHT,
+             position[2] + half_width),
+        )
 
     def get_sight_vector(self):
         rotX, rotY = -self.rotation[0] / 180 * math.pi, self.rotation[1] / 180 * math.pi

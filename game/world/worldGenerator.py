@@ -1,13 +1,19 @@
+import math
 import random
+import time
 from collections import deque
 
-from game.world.Biomes import Biomes, getBiomeByTemp
+from game.world.Biomes import Biomes
 from game.world.PerlinNoise import PerlinNoise
 from settings import *
 
 
 class worldGenerator:
-    SEA_LEVEL = CHUNK_SIZE[1] - 2
+    MIN_Y = WORLD_MIN_Y
+    MAX_Y = WORLD_MAX_Y
+    SEA_LEVEL = SEA_LEVEL
+    GENERATION_RADIUS = CHUNKS_RENDER_DISTANCE
+    BACKGROUND_GENERATION_RADIUS = 64
 
     def __init__(self, glClass, seed=43242):
         self.seed = seed
@@ -15,13 +21,25 @@ class worldGenerator:
         self.worldPerlin = PerlinNoise(seed, mh=8)
         self.perlinBiomes = PerlinNoise(seed ** 2, mh=10)
         self.gl = glClass
+        offset_rng = random.Random(seed ^ 0x5DEECE66D)
+        self._noise_offsets = tuple(offset_rng.uniform(-8192, 8192) for _ in range(16))
+        self._height_cache = {}
+        self._terrain_cache = {}
+        self._column_biome_cache = {}
 
         q = []
-        for x in range(-90, 90, CHUNK_SIZE[0]):
-            for y in range(-90, 90, CHUNK_SIZE[2]):
-                q.append((x, y))
+        radius = self.GENERATION_RADIUS
+        for x in range(-radius, radius + 1, CHUNK_SIZE[0]):
+            for z in range(-radius, radius + 1, CHUNK_SIZE[2]):
+                q.append((x, z))
         q = sorted(q, key=lambda i: i[0] ** 2 + i[1] ** 2)
         self.queue = deque(q)
+        self.queued_chunks = set(q)
+        self.generated_chunks = set()
+        self.generating_chunks = set()
+        self.pending_columns = deque()
+        self._remaining_columns = {}
+        self._last_queue_center = None
 
         self.start = len(self.queue)
         self.blocks = {}
@@ -35,23 +53,84 @@ class worldGenerator:
             blocks[p] = t
             self.loading.append((p, t))
 
-    def genChunk(self, player, max_chunks_per_call=8, max_blocks_per_call=256):
+    def genChunk(self, player, max_chunks_per_call=8, max_blocks_per_call=256,
+                 time_budget=0.004):
         if player.hp == -1:
             player.hp = 20
+        self._queue_around(player.position)
 
         pending_limit = max_blocks_per_call * 4
-        chunks_processed = 0
-        while (self.queue and chunks_processed < max_chunks_per_call and
-               len(self.loading) < pending_limit):
-            self.gen(*self.queue.popleft())
-            chunks_processed += 1
+        chunks_started = 0
+        columns_generated = 0
+        column_budget = max(1, max_blocks_per_call // 64)
+        deadline = time.perf_counter() + time_budget if time_budget > 0 else None
+        while column_budget > 0 and len(self.loading) < pending_limit:
+            if not self.pending_columns:
+                if not self.queue or chunks_started >= max_chunks_per_call:
+                    break
+                if time_budget > 0:
+                    origin = self.queue[0]
+                    center_x = math.floor(player.position[0] / CHUNK_SIZE[0]) * CHUNK_SIZE[0]
+                    center_z = math.floor(player.position[2] / CHUNK_SIZE[2]) * CHUNK_SIZE[2]
+                    dx, dz = origin[0] - center_x, origin[1] - center_z
+                    if dx * dx + dz * dz > self.BACKGROUND_GENERATION_RADIUS ** 2:
+                        break
+                origin = self.queue.popleft()
+                self.queued_chunks.discard(origin)
+                self.generating_chunks.add(origin)
+                self._remaining_columns[origin] = CHUNK_SIZE[0] * CHUNK_SIZE[2]
+                for x in range(origin[0], origin[0] + CHUNK_SIZE[0]):
+                    for z in range(origin[1], origin[1] + CHUNK_SIZE[2]):
+                        self.pending_columns.append((x, z, origin))
+                chunks_started += 1
+
+            x, z, origin = self.pending_columns.popleft()
+            self._generate_column(x, z)
+            columns_generated += 1
+            self._remaining_columns[origin] -= 1
+            if self._remaining_columns[origin] == 0:
+                del self._remaining_columns[origin]
+                self.generating_chunks.discard(origin)
+                self.generated_chunks.add(origin)
+            column_budget -= 1
+            if deadline is not None and time.perf_counter() >= deadline:
+                break
 
         block_budget = max_blocks_per_call
+        blocks_loaded = 0
         while self.loading and block_budget > 0:
             p, t = self.loading.popleft()
             if p not in self.gl.cubes.cubes:
                 self.gl.cubes.add(p, t)
+                blocks_loaded += 1
             block_budget -= 1
+        return columns_generated, blocks_loaded
+
+    @property
+    def generated_count(self):
+        return len(self.generated_chunks)
+
+    def _queue_around(self, position):
+        size_x, _, size_z = CHUNK_SIZE
+        center = (math.floor(position[0] / size_x) * size_x,
+                  math.floor(position[2] / size_z) * size_z)
+        if center == self._last_queue_center:
+            return
+        self._last_queue_center = center
+        desired = set()
+        radius = self.GENERATION_RADIUS
+        for x in range(center[0] - radius, center[0] + radius + 1, size_x):
+            for z in range(center[1] - radius, center[1] + radius + 1, size_z):
+                origin = (x, z)
+                if ((x - center[0]) ** 2 + (z - center[1]) ** 2 <= radius ** 2
+                        and origin not in self.generated_chunks
+                        and origin not in self.generating_chunks):
+                    desired.add(origin)
+        self.queued_chunks = desired
+        pending = list(self.queued_chunks)
+        pending.sort(key=lambda item: ((item[0] - center[0]) ** 2
+                                       + (item[1] - center[1]) ** 2))
+        self.queue = deque(pending)
 
     def _biome_data(self, biome_name):
         """Cache the per-biome constants; they never change per column."""
@@ -72,111 +151,194 @@ class worldGenerator:
         return data
 
     def gen(self, xx, zz):
-        sy = CHUNK_SIZE[1]
-        oldY = 0
-
-        # hoist attribute lookups out of the per-block loops
-        add = self.add
-        randint = random.randint
-        gen_ore = self.genOre
-        world_perlin = self.worldPerlin
-        biome_perlin = self.perlinBiomes
-        sea_level = self.SEA_LEVEL
-        ore_depth = sy - 20
-        first_spawn = self.gl.startPlayerPos == [0, -9000, 0]
-
         for x in range(xx, xx + CHUNK_SIZE[0]):
             for z in range(zz, zz + CHUNK_SIZE[2]):
-                y = world_perlin(x, z)
-                biome_name = getBiomeByTemp(biome_perlin(x, z) * 3)
-                (activeBiome, grass, dirt, stone,
-                 ch, is_ocean, is_woodland, plant) = self._biome_data(biome_name)
+                self._generate_column(x, z)
 
-                if biome_name == "mountains":
-                    if -3 < oldY - y < 3:
-                        y = int((oldY + y) / 2)
-                elif biome_name == "big_mountains":
-                    if -3 < oldY - y < 3:
-                        y *= 2
-                        y = int((oldY + y) / 2)
-                oldY = y
-                y += sy
-                if is_ocean:
-                    y = min(y, sea_level - 3)
+    def _generate_column(self, x, z):
+        add = self.add
+        sea_level = self.SEA_LEVEL
+        y = self.sample_height(x, z)
+        biome_name = self.sample_biome(x, z)
+        (_active_biome, grass, dirt, stone,
+          ch, is_ocean, is_woodland, plant) = self._biome_data(biome_name)
+        rng = random.Random(self._coordinate_seed(x, 0, z, 0xC011))
+        spawnTree = rng.randint(0, ch) == 20 and y > sea_level + 1 and not is_ocean
 
-                spawnTree = randint(0, ch) == 20 and y > sy - 5 and not is_ocean
+        surface_open = not is_ocean and self.is_cave(x, y, z, y)
+        if not surface_open:
+            add((x, y, z), stone if is_ocean else grass)
 
-                add((x, y, z), stone if is_ocean else grass)
+        if is_ocean:
+            for water_y in range(y + 1, sea_level + 1):
+                add((x, water_y, z), "water")
+        if not surface_open and spawnTree and is_woodland:
+            self.spawnTree(x, y, z, rng)
+        elif not surface_open and plant == "tall_grass" and rng.randint(0, 6) == 0:
+            add((x, y + 1, z), "tall_grass")
+        elif not surface_open and plant == "cactus" and rng.randint(0, 31) == 0:
+            for cactus_y in range(y + 1, y + rng.randint(2, 3) + 1):
+                add((x, cactus_y, z), "cactus")
 
-                if is_ocean:
-                    for water_y in range(y + 1, sea_level + 1):
-                        add((x, water_y, z), "water")
-                elif first_spawn and not spawnTree:
-                    self.gl.startPlayerPos = [x, y + 2, z]
-                    self.gl.player.position = [x, y + 2, z]
-                    self.gl.player.lastPlayerPosOnGround = [x, y + 2, z]
-                    first_spawn = False
+        surface_depth = rng.randint(3, 5)
+        for block_y in range(self.MIN_Y, y):
+            if block_y == self.MIN_Y:
+                add((x, block_y, z), "bedrock")
+                continue
+            if block_y <= self.MIN_Y + 4:
+                bedrock_chance = (self.MIN_Y + 5 - block_y) / 5
+                if rng.random() < bedrock_chance:
+                    add((x, block_y, z), "bedrock")
+                    continue
+            if self.is_cave(x, block_y, z, y):
+                continue
+            depth = y - block_y
+            material = dirt if depth <= surface_depth else stone
+            ore = self._ore_at(x, block_y, z, biome_name) if depth > surface_depth else None
+            add((x, block_y, z), ore or material)
 
-                if spawnTree and is_woodland:
-                    self.spawnTree(x, y, z)
-                elif plant == "tall_grass" and randint(0, 6) == 0:
-                    add((x, y + 1, z), "tall_grass")
-                elif plant == "cactus" and randint(0, 31) == 0:
-                    for cactus_y in range(y + 1, y + randint(2, 3) + 1):
-                        add((x, cactus_y, z), "cactus")
+    @staticmethod
+    def _clamp(value, low, high):
+        return max(low, min(high, value))
 
-                add((x, 0, z), "bedrock")
+    @staticmethod
+    def _smoothstep(low, high, value):
+        value = max(0.0, min(1.0, (value - low) / (high - low)))
+        return value * value * (3.0 - 2.0 * value)
 
-                # the per-block randint is deliberate: it gives the dirt/stone
-                # boundary its ragged look, so it must stay per block
-                for i in range(1, y):
-                    add((x, i, z), dirt if i > y - randint(5, 10) else stone)
-                    if i < ore_depth:
-                        gen_ore(x, i, z)
+    def _terrain_parameters(self, x, z):
+        key = (x, z)
+        cached = self._terrain_cache.get(key)
+        if cached is not None:
+            return cached
+        offsets = self._noise_offsets
+        noise = self.worldPerlin.noise2d
+        continentalness = noise((x + offsets[0]) / 420, (z + offsets[1]) / 420)
+        erosion = noise((x + offsets[2]) / 180, (z + offsets[3]) / 180)
+        ridge_noise = noise((x + offsets[4]) / 105, (z + offsets[5]) / 105)
+        detail = noise((x + offsets[6]) / 38, (z + offsets[7]) / 38)
+        valley = abs(noise((x + offsets[8]) / 125, (z + offsets[9]) / 125))
+        result = continentalness, erosion, ridge_noise, detail, valley
+        if len(self._terrain_cache) >= 65536:
+            self._terrain_cache.clear()
+        self._terrain_cache[key] = result
+        return result
 
-    # probability that ``randint(0, 5753) == randint(0, 1575)``: for each of the
-    # 1576 shared values both draws must agree, so p = 1576 / (5754 * 1576)
-    ORE_CHANCE = 1.0 / 5754
+    def sample_height(self, x, z):
+        key = (x, z)
+        cached = self._height_cache.get(key)
+        if cached is not None:
+            return cached
+        continentalness, erosion, ridge_noise, detail, valley = self._terrain_parameters(x, z)
+        land = self._smoothstep(-0.18, 0.28, continentalness)
+        ridge = max(0.0, 1.0 - abs(ridge_noise) * 1.8)
+        erosion_factor = self._clamp(0.65 - erosion, 0.0, 1.25)
+        height = self.SEA_LEVEL + continentalness * 52 + detail * 9
+        height += land * max(0.0, ridge - 0.48) / 0.52 * erosion_factor * 125
+        height -= land * max(0.0, 0.16 - valley) / 0.16 * 24
+        if continentalness < -0.16:
+            height = self.SEA_LEVEL - 5 + (continentalness + 0.16) * 72 + detail * 5
+        height = round(self._clamp(height, self.MIN_Y + 5, self.MAX_Y - 16))
+        if len(self._height_cache) >= 65536:
+            self._height_cache.clear()
+        self._height_cache[key] = height
+        return height
 
-    def genOre(self, x, y, z):
-        # the original drew two randints per block and discarded almost all of
-        # them; one cheap random() reproduces the same rate far faster
-        if random.random() >= self.ORE_CHANCE:
-            return
-        r1 = random.randint(-1, 2)
-        r2 = random.randint(0, 2)
-        ore = self.getOreByY(y)
+    def sample_biome(self, x, z):
+        key = (x, z)
+        cached = self._column_biome_cache.get(key)
+        if cached is not None:
+            return cached
+        height = self.sample_height(x, z)
+        if height < self.SEA_LEVEL:
+            biome = "ocean"
+        else:
+            offsets = self._noise_offsets
+            climate = self.perlinBiomes.noise2d
+            temperature = climate((x + offsets[10]) / 260, (z + offsets[11]) / 260)
+            humidity = climate((x + offsets[12]) / 220, (z + offsets[13]) / 220)
+            if height >= 135:
+                biome = "big_mountains"
+            elif height >= 105:
+                biome = "mountains"
+            elif temperature > 0.24 and humidity < 0.08:
+                biome = "desert"
+            elif temperature < -0.22:
+                biome = "taiga"
+            elif humidity > 0.14:
+                biome = "forest"
+            else:
+                biome = "plains"
+        if len(self._column_biome_cache) >= 65536:
+            self._column_biome_cache.clear()
+        self._column_biome_cache[key] = biome
+        return biome
 
-        for xi in range(r1, r2):
-            for yi in range(r1):
-                for zi in range(r2):
-                    self.add((x + xi, yi + y, zi + z), ore)
+    def is_cave(self, x, y, z, surface=None):
+        surface = self.sample_height(x, z) if surface is None else surface
+        if y <= self.MIN_Y + 4 or y > surface:
+            return False
+        offsets = self._noise_offsets
+        noise = self.worldPerlin.noise
+        depth = surface - y
+        openness = self._clamp((depth - 5) / 48, 0.0, 1.0)
+        cheese = noise((x + offsets[0]) / 44, (y + offsets[14]) / 34,
+                       (z + offsets[1]) / 44)
+        threshold = 0.62 if depth < 5 else 0.46 - openness * 0.10
+        if cheese > threshold:
+            return True
+        tunnel_a = abs(noise((x + offsets[4]) / 23, (y + offsets[15]) / 19,
+                             (z + offsets[5]) / 23))
+        if tunnel_a >= 0.045:
+            return False
+        tunnel_b = abs(noise((x + offsets[8]) / 27, (y - offsets[14]) / 21,
+                             (z + offsets[9]) / 27))
+        return tunnel_b < 0.045
 
-    def getOreByY(self, y):
-        if y < 20:
-            if random.randint(0, 150) > 54:
-                return "diamond_ore"
-            if random.randint(0, 1000) > 54:
-                return "emerald_ore"
-            if random.randint(0, 180) < 54:
-                return "redstone_ore"
-        elif y < 40:
-            if random.randint(0, 180) == 54:
-                return "gold_ore"
-        if random.randint(0, 100) < 54:
-            return "iron_ore"
-        if random.randint(0, 80) < 54:
-            return "coal_ore"
-        if random.randint(0, 180) == 54:
-            return "dirt"
-        if random.randint(0, 180) == 54:
-            return "gravel"
-        return "dirt"
+    def _coordinate_seed(self, x, y, z, salt=0):
+        value = (self.seed ^ salt ^ (x * 0x9E3779B185EBCA87)
+                 ^ (y * 0xC2B2AE3D27D4EB4F) ^ (z * 0x165667B19E3779F9))
+        value &= (1 << 64) - 1
+        value ^= value >> 30
+        value = (value * 0xBF58476D1CE4E5B9) & ((1 << 64) - 1)
+        value ^= value >> 27
+        value = (value * 0x94D049BB133111EB) & ((1 << 64) - 1)
+        return value ^ (value >> 31)
+
+    def _random_at(self, x, y, z, salt):
+        return self._coordinate_seed(x, y, z, salt) / float(1 << 64)
+
+    def _ore_at(self, x, y, z, biome_name=None):
+        selector = self._random_at(x // 2, y // 2, z // 2, 0x0AE)
+        if self._random_at(x, y, z, 0x0AF) >= 0.72:
+            return None
+        candidates = []
+        if y <= 16:
+            depth_factor = self._clamp((16 - y) / 80, 0.0, 1.0)
+            candidates.extend((("diamond_ore", 0.0015 + depth_factor * 0.007),
+                               ("redstone_ore", 0.002 + depth_factor * 0.008)))
+        if y <= 32:
+            candidates.append(("gold_ore", 0.004))
+        iron_factor = self._clamp(1.0 - abs(y - 16) / 96, 0.0, 1.0)
+        candidates.append(("iron_ore", 0.002 + iron_factor * 0.012))
+        lapis_factor = self._clamp(1.0 - abs(y) / 64, 0.0, 1.0)
+        candidates.append(("lapis_ore", lapis_factor * 0.005))
+        coal_factor = self._clamp(1.0 - abs(y - 96) / 128, 0.0, 1.0)
+        candidates.append(("coal_ore", coal_factor * 0.014))
+        if (-16 <= y <= 256
+                and (biome_name or self.sample_biome(x, z)) in ("mountains", "big_mountains")):
+            candidates.append(("emerald_ore", 0.004))
+        cumulative = 0.0
+        for ore, chance in candidates:
+            cumulative += chance
+            if selector < cumulative:
+                return ore
+        return None
 
     UNSAFE_GROUND = ("water", "lava", "cactus", "tnt")
     FOLIAGE = ("sapling", "tall_grass")
 
-    def find_safe_spawn(self, center_x=None, center_z=None, radius=48):
+    def find_safe_spawn(self, center_x=None, center_z=None, radius=48, allow_water=False):
         cubes = self.gl.cubes.cubes
         if not cubes:
             return None
@@ -193,7 +355,7 @@ class worldGenerator:
         best = None
         best_score = None
         for x, z in self._spiral_columns(center_x, center_z, radius):
-            candidate = self._column_spawn(x, z)
+            candidate = self._column_spawn(x, z, allow_water)
             if candidate is None:
                 continue
             distance = abs(x - center_x) + abs(z - center_z)
@@ -215,26 +377,28 @@ class worldGenerator:
                 yield center_x - r, center_z + offset
                 yield center_x + r, center_z + offset
 
-    def _column_spawn(self, x, z):
+    def _column_spawn(self, x, z, allow_water=False):
         cubes = self.gl.cubes.cubes
-        top = self.SEA_LEVEL + 40
-        for y in range(top, 0, -1):
+        for y in range(self.MAX_Y, self.MIN_Y - 1, -1):
             ground = cubes.get((x, y, z))
             if ground is None:
                 continue
+            if ground.name == "water" and allow_water:
+                return [x, y + 0.5 + PLAYER_EYE_HEIGHT, z]
             if ground.name in self.UNSAFE_GROUND or ground.name.startswith("leaves"):
                 return None
             if ground.name in self.FOLIAGE:
                 continue
             if any((x, y + offset, z) in cubes for offset in (1, 2, 3)):
                 return None
-            return [x, y + 2, z]
+            return [x, y + 0.5 + PLAYER_EYE_HEIGHT, z]
         return None
 
-    def spawnTree(self, x, y, z):
-        treeHeight = random.randint(5, 7)
+    def spawnTree(self, x, y, z, rng=None):
+        rng = rng or random
+        treeHeight = rng.randint(5, 7)
 
-        for i in range(y, y + treeHeight):
+        for i in range(y + 1, y + treeHeight + 1):
             self.add((x, i, z), 'log_oak')
         for i in range(x + -2, x + 3):
             for j in range(z + -2, z + 3):

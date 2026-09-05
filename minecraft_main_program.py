@@ -9,6 +9,7 @@ import time
 from random import randint
 import pygame.time
 import pyglet
+from pygame._sdl2 import Window as SDLWindow
 from OpenGL.GL import *
 from OpenGL.raw.GLU import gluOrtho2D
 from functions import drawInfoLabel, getElpsTime, translateSeed
@@ -40,6 +41,25 @@ pyglet.options['debug_gl'] = False
 def log_deb(msg):
     logging.debug(msg)
 
+
+def create_opengl_display(size, flags):
+    """Create every GL context with a safe 4x-MSAA fallback."""
+    # Always request a multisample-capable framebuffer so the setting can be
+    # toggled at runtime; Scene.setAntialiasing controls whether it is active.
+    samples = 4
+    pygame.display.gl_set_attribute(pygame.GL_MULTISAMPLEBUFFERS, 1)
+    pygame.display.gl_set_attribute(pygame.GL_MULTISAMPLESAMPLES, samples)
+    try:
+        return pygame.display.set_mode(size, flags, vsync=1)
+    except pygame.error:
+        if not samples:
+            raise
+        logging.warning("4x MSAA context unavailable; retrying without multisampling")
+        pygame.display.gl_set_attribute(pygame.GL_MULTISAMPLEBUFFERS, 0)
+        pygame.display.gl_set_attribute(pygame.GL_MULTISAMPLESAMPLES, 0)
+        settings.set_anti_aliasing(False)
+        return pygame.display.set_mode(size, flags, vsync=1)
+
 def choose_langs():
     global lang_choose, mainFunction, translations
     current = settings.current_language
@@ -62,10 +82,24 @@ def respawn():
     log_deb("setting player health point...")
     player.hp = 20
     player.playerDead = False
+    player.hurt_cooldown = 0
+    player.last_damage = 0
+    player.hurt_time = 0
+    player.spawn_protection = 3.0
+    player.fall_distance = 0
+    player.playerFallY = 0
+    player.dy = 0
+    player.velocity_x = 0
+    player.velocity_z = 0
+    player.bInAir = False
+    player.in_water = False
+    player.is_sprinting = False
+    player.hand_swing = 0
+    player.cameraShake = [0, False]
+    gui.hideText()
     log_deb("setting player position...")
     safe_spawn = scene.worldGen.find_safe_spawn()
     if safe_spawn:
-        scene.startPlayerPos = safe_spawn
         player.position = safe_spawn
         player.lastPlayerPosOnGround = safe_spawn
     else:
@@ -107,14 +141,15 @@ def quit_to_menu():
     sound.musicPlayer.play()
     sound.musicPlayer.set_volume(sound.volume)
     log_deb("resetting scene...")
+    gc.unfreeze()
     scene.resetScene()
     scene.initScene()
+    player.inventory.initWindow()
 
-    player.position = [0, -90, 0]
-    player.hp = -1
-    player.playerDead = False
+    player.reset_for_world()
 
     gc.collect()
+    gc.freeze()
     mainFunction = draw_main_menu
 
 def show_settings():
@@ -138,6 +173,36 @@ def toggle_player_shadows():
 
 def toggle_leaves_sway():
     settings.set_leaves_sway(not settings.LEAVES_SWAY)
+
+def cycle_shadow_quality():
+    qualities = ("LOW", "MEDIUM", "HIGH")
+    current = qualities.index(settings.SHADOW_QUALITY)
+    quality = qualities[(current + 1) % len(qualities)]
+    settings.set_shadow_quality(quality)
+    scene.light.set_shadow_quality(quality)
+
+def toggle_anti_aliasing():
+    enabled = not settings.ANTI_ALIASING
+    if enabled:
+        enabled = scene.setAntialiasing(True)
+    else:
+        scene.setAntialiasing(False)
+    settings.set_anti_aliasing(enabled)
+
+def toggle_dynamic_lighting():
+    settings.set_dynamic_lighting(not settings.DYNAMIC_LIGHTING)
+
+def cycle_difficulty():
+    difficulties = ("PEACEFUL", "EASY", "NORMAL", "HARD")
+    current = difficulties.index(settings.DIFFICULTY)
+    settings.set_difficulty(difficulties[(current + 1) % len(difficulties)])
+
+
+def update_sound_volume(value):
+    volume = max(0.0, min(1.0, float(value) / 100))
+    sound.volume = volume
+    sound.musicPlayer.set_volume(volume)
+    settings.set_sound_volume(volume)
 
 def edit_panorama():
     global mainFunction
@@ -172,7 +237,7 @@ def pause():
 
 def death_screen():
     global PAUSE, mainFunction
-    PAUSE = not PAUSE
+    PAUSE = True
     scene.allowEvents["movePlayer"] = True
     scene.allowEvents["keyboardAndMouse"] = True
     mainFunction = draw_death_screen
@@ -283,6 +348,15 @@ def draw_settings_menu(mc):
     shader_settings_button.y = scene.HEIGHT // 2 - (shader_settings_button.button.height // 2) + 20
     shader_settings_button.update(mp, mc)
 
+    difficulty_button = Button(
+        scene, f"Difficulty: {settings.DIFFICULTY.title()}", 0, 0,
+        text_x=scene.WIDTH // 2 - (400 // 2),
+    )
+    difficulty_button.setEvent(cycle_difficulty)
+    difficulty_button.x = scene.WIDTH // 2 - (difficulty_button.button.width // 2) - 170
+    difficulty_button.y = scene.HEIGHT // 2 - (difficulty_button.button.height // 2) + 70
+    difficulty_button.update(mp, mc)
+
     sound.musicPlayer.set_volume(soundVolumeSliderBox.val / 100)
     sound.volume = soundVolumeSliderBox.val / 100
 
@@ -334,12 +408,38 @@ def gen_world(mc):
         for iy in range(0, scene.HEIGHT, tex.height):
             tex.blit(ix, iy)
             tex2.blit(ix, iy)
-    scene.genWorld()
-    if scene.worldGen.start - len(scene.worldGen.queue) > chunk_cnt:
-        scene.genTime = 16
+    needs_spawn = scene.startPlayerPos == [0, -9000, 0]
+    generated_before_update = scene.worldGen.generated_count > chunk_cnt
+    if generated_before_update:
+        # Stop expanding the initial radius and drain blocks already generated.
+        scene.worldGen.genChunk(player, max_chunks_per_call=0, max_blocks_per_call=1024)
+    else:
+        scene.genWorld()
+    mesh_center = (player.position if not needs_spawn else
+                   [0, settings.SEA_LEVEL + settings.PLAYER_EYE_HEIGHT, 0])
+    scene.cubes.rebuild_dirty_chunks(
+        mesh_center, max_rebuilds=8, cube_budget=1024, time_budget=0
+    )
+    generated_enough = scene.worldGen.generated_count > chunk_cnt
+    pending_blocks_ready = not scene.worldGen.loading and not scene.worldGen.pending_columns
+    if generated_enough and pending_blocks_ready and needs_spawn:
+        spawn = scene.worldGen.find_safe_spawn(0, 0, radius=48)
+        if spawn is None:
+            spawn = scene.worldGen.find_safe_spawn(0, 0, radius=48, allow_water=True)
+        if spawn is not None:
+            scene.startPlayerPos = list(spawn)
+            player.position = list(spawn)
+            player.lastPlayerPosOnGround = list(spawn)
+            needs_spawn = False
+    initial_chunks = scene.cubes.chunks_within_distance(
+        player.position if not needs_spawn else mesh_center
+    )
+    initial_meshes_ready = all(not chunk.dirty for chunk in initial_chunks)
+    if generated_enough and pending_blocks_ready and not needs_spawn and initial_meshes_ready:
+        scene.genTime = 2
         IN_MENU = False
         PAUSE = False
-    proc = round((scene.worldGen.start - len(scene.worldGen.queue)) * 100 / chunk_cnt)
+    proc = min(100, round(scene.worldGen.generated_count * 100 / chunk_cnt))
     drawInfoLabel(scene, translations["load.world"], xx=scene.WIDTH // 2, yy=scene.HEIGHT // 2, style=[('', '')],
                   size=12, anchor_x='center')
     drawInfoLabel(scene, translations["gen.terrain"] + f" {proc}%...", xx=scene.WIDTH // 2, yy=scene.HEIGHT // 2 - 39,
@@ -426,6 +526,9 @@ def draw_shader_settings_menu(mc):
     button_x = center_x - 200
     options = (
         (f"Shaders: {'YES' if settings.SHADERS else 'NO'}", toggle_shaders),
+        (f"Shadow Quality: {settings.SHADOW_QUALITY}", cycle_shadow_quality),
+        (f"Anti-Aliasing: {'YES' if settings.ANTI_ALIASING else 'NO'}", toggle_anti_aliasing),
+        (f"Dynamic Lighting: {'YES' if settings.DYNAMIC_LIGHTING else 'NO'}", toggle_dynamic_lighting),
         (f"Player Shadows: {'YES' if settings.PLAYER_SHADOWS else 'NO'}", toggle_player_shadows),
         (f"Leaves Sway: {'YES' if settings.LEAVES_SWAY else 'NO'}", toggle_leaves_sway),
     )
@@ -433,7 +536,7 @@ def draw_shader_settings_menu(mc):
         button = Button(scene, text, 0, 0, text_x=center_x)
         button.setEvent(callback)
         button.x = button_x
-        button.y = scene.HEIGHT // 2 - 95 + index * 50
+        button.y = scene.HEIGHT // 2 - 135 + index * 45
         button.update(mp, mc)
 
     back_button = Button(scene, "Back", 0, 0)
@@ -472,7 +575,11 @@ logging.info("Loading the game...")
 resizeEvent = False
 LAST_SAVED_RESOLUTION = [WIDTH, HEIGHT]
 pygame.mixer.pre_init(44100, 16, 2, 4096)
-screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.DOUBLEBUF | pygame.OPENGL | pygame.RESIZABLE, vsync=1)
+screen = create_opengl_display(
+    (WIDTH, HEIGHT), pygame.DOUBLEBUF | pygame.OPENGL | pygame.RESIZABLE
+)
+sdl_window = SDLWindow.from_display_module()
+fullscreen = False
 
 glClearColor(1, 1, 1, 1)
 glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
@@ -500,7 +607,8 @@ scene.player = player
 scene.deathScreen = death_screen
 scene.initScene()
 ModLoader = mod_loader.ModLoader(gl=scene, sound=sound, settings=settings, player=player, gui=gui, gc=gc)
-ModLoader.try_better()
+scene.mod_loader = ModLoader
+ModLoader.load_pre_init()
 logging.info("setting player: happyleibniz")
 logging.info("Loading sounds...")
 sound.BLOCKS_SOUND["pickUp"] = pygame.mixer.Sound("sounds/pick.mp3")
@@ -622,6 +730,7 @@ zentra.height = 96
 gui.addGuiElement("crosshair", (scene.WIDTH // 2 - 9, scene.HEIGHT // 2 - 9))
 
 player.inventory.initWindow()
+ModLoader.load_remaining()
 
 showInfoLabel = False
 
@@ -643,6 +752,8 @@ quitButton.setEvent(exit)
 
 closeSettingsButton = Button(scene, "Close", 0, 0)
 soundVolumeSliderBox = Sliderbox(scene, translations["sound.volume"], 100, 0, 0)
+soundVolumeSliderBox.val = round(settings.SOUND_VOLUME * 100)
+soundVolumeSliderBox.setEvent(update_sound_volume)
 seedEditArea = Editarea(scene, translations["World.Seed"], 0, 0)
 commandEditArea = Editarea(scene, "Commands input here", 0, 0)
 
@@ -666,6 +777,11 @@ respawnButton.setEvent(respawn)
 print("Loading complete!")
 mainMenuRotation = [20, 180]
 mainFunction = draw_main_menu
+
+# Keep the long-lived world/UI graph out of cyclic-GC scans. Reference counting
+# still frees ordinary objects, while new cycles remain collectible.
+gc.collect()
+gc.freeze()
 
 # Delta time variables
 last_time = time.time()
@@ -697,22 +813,17 @@ while True:
         if event.type == pygame.KEYDOWN:
             keys.append(event.key)
             if event.key == pygame.K_F11:
-                if scene.WIDTH != monitor.current_w or scene.HEIGHT != monitor.current_h:
+                if not fullscreen:
                     LAST_SAVED_RESOLUTION = [scene.WIDTH, scene.HEIGHT]
-                    WIDTH = monitor.current_w
-                    HEIGHT = monitor.current_h
-                    screen = pygame.display.set_mode((monitor.current_w, monitor.current_h),
-                                                     pygame.DOUBLEBUF | pygame.OPENGL | pygame.RESIZABLE
-                                                     | pygame.FULLSCREEN, vsync=1)
-                    scene.resizeCGL(WIDTH, HEIGHT)
-                    resizeEvent = True
+                    sdl_window.set_fullscreen(desktop=True)
+                    fullscreen = True
                 else:
-                    WIDTH = LAST_SAVED_RESOLUTION[0]
-                    HEIGHT = LAST_SAVED_RESOLUTION[1]
-                    screen = pygame.display.set_mode((WIDTH, HEIGHT),
-                                                     pygame.DOUBLEBUF | pygame.OPENGL | pygame.RESIZABLE, vsync=1)
-                    scene.resizeCGL(WIDTH, HEIGHT)
-                    resizeEvent = True
+                    sdl_window.set_windowed()
+                    sdl_window.size = tuple(LAST_SAVED_RESOLUTION)
+                    fullscreen = False
+                WIDTH, HEIGHT = sdl_window.size
+                scene.resizeCGL(WIDTH, HEIGHT)
+                resizeEvent = True
         if event.type == pygame.VIDEORESIZE:
             WIDTH = event.w
             HEIGHT = event.h
@@ -817,7 +928,7 @@ while True:
                                  f"Facing: {player.rotation[1]} / {player.rotation[0]}\n"
                                  f"Biome: {getBiomeByTemp(scene.worldGen.perlinBiomes(player.x(), player.z()) * 3)}\n"
                                  f"Looking at: {scene.lookingAt}\n"
-                                 f"Count of chunks: {scene.worldGen.start - len(scene.worldGen.queue)} "
+                                 f"Count of chunks: {scene.worldGen.generated_count} "
                                  f"({scene.worldGen.start})",
                           shadow=False, label_color=(224, 224, 224), xx=scene.WIDTH // 2, yy=scene.HEIGHT // 2,
                           style=[('', '')], size=12, anchor_x='center')
@@ -830,7 +941,7 @@ while True:
             gui.shows["crosshair"][1] = (scene.WIDTH // 2 - 9, scene.HEIGHT // 2 - 9)
         else:
             gui.shows["crosshair"][1] = (-100, -100)
-        scene.updateScene(dt)
+        scene.drawPaused()
         player.inventory.draw()
         gui.update()
         mainFunction(mbclicked)
