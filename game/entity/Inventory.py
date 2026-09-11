@@ -32,6 +32,14 @@ class Inventory:
         self.window = None
         self.durability = {}
 
+        # Persistent label used for the cursor stack count. Reusing a single
+        # label removes the per-frame pyglet.text.Label allocation that the
+        # old updateWindow path made every time the cursor held more than one
+        # item.
+        self._held_label = pyglet.text.Label(
+            "", font_name='Minecraft Rus',
+            color=(255, 255, 255, 255), font_size=10)
+
         old = False
         for i in range(10):
             old = not old
@@ -197,43 +205,35 @@ class Inventory:
     def updateWindow(self, win, mousePos):
         self.refreshCraftingResult()
 
-        for i in self.window.cellPositions.items():
-            xx, yy = self.window.cellPositions[i[0]][0][0], self.window.cellPositions[i[0]][0][1]
-
-            self.window.cellPositions[i[0]][1] = self.inventory[i[0]]
-            inv = self.inventory[i[0]]
+        for cell, position in self.window.cellPositions.items():
+            xx, yy = position[0][0], position[0][1]
+            inv = self.inventory[cell]
+            position[1] = inv
 
             if inv[1] == 0 or inv[0] == 0:
                 continue
-            self.gl.inventory_textures[inv[0]].blit((self.gl.WIDTH // 2 - (win.width // 2)) + xx + 5,
-                                                    (self.gl.HEIGHT // 2 + (win.height // 2)) - yy - 27)
+            self.gl.inventory_textures[inv[0]].blit(
+                (self.gl.WIDTH // 2 - (win.width // 2)) + xx + 5,
+                (self.gl.HEIGHT // 2 + (win.height // 2)) - yy - 27)
             if inv[1] > 1:
-                lx = (self.gl.WIDTH // 2 - (win.width // 2)) + xx + 15
-                ly = (self.gl.HEIGHT // 2 + (win.height // 2)) - yy - 32
-                lbl = pyglet.text.Label(str(inv[1]),
-                                        font_name='Minecraft Rus',
-                                        color=(255, 255, 255, 255),
-                                        font_size=10,
-                                        x=lx, y=ly)
+                lbl = self.blocksLabel[cell]
+                lbl.text = str(inv[1])
+                lbl.x = (self.gl.WIDTH // 2 - (win.width // 2)) + xx + 15
+                lbl.y = (self.gl.HEIGHT // 2 + (win.height // 2)) - yy - 32
                 lbl.draw()
 
-        if self.draggingItem:
-            if self.draggingItem[1]:
-                drg = self.draggingItem
-                mp = list(mousePos)
-                mp[0] -= 11
-                mp[1] += 11
+        if self.draggingItem and self.draggingItem[1]:
+            drg = self.draggingItem
+            mp = list(mousePos)
+            mp[0] -= 11
+            mp[1] += 11
 
-                self.gl.inventory_textures[drg[0]].blit(mp[0], self.gl.HEIGHT - mp[1])
+            self.gl.inventory_textures[drg[0]].blit(mp[0], self.gl.HEIGHT - mp[1])
 
-                lx = mp[0] + 11
-                ly = self.gl.HEIGHT - mp[1] - 5
-                lbl = pyglet.text.Label(str(drg[1]),
-                                        font_name='Minecraft Rus',
-                                        color=(255, 255, 255, 255),
-                                        font_size=10,
-                                        x=lx, y=ly)
-                lbl.draw()
+            self._held_label.text = str(drg[1])
+            self._held_label.x = mp[0] + 11
+            self._held_label.y = self.gl.HEIGHT - mp[1] - 5
+            self._held_label.draw()
 
     def addBlock(self, name, count=1):
         """Pick up items: top up the selected slot and matching stacks first."""

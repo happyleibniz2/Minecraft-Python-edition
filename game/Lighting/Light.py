@@ -125,12 +125,10 @@ void main() {
     vec4 texel = texture2D(texture0, gl_TexCoord[0].xy);
     float dayAmount = smoothstep(0.12, 0.85, skyLight);
 
-    // Complementary-inspired cool shadows and warm daylight.
     vec3 nightSky = vec3(0.34, 0.42, 0.72) * skyLight;
     vec3 daySky = vec3(1.04, 1.00, 0.91) * skyLight;
     vec3 skylight = mix(nightSky, daySky, dayAmount);
 
-    // Smooth warm torch light with a subtle non-disruptive flame flicker.
     float flicker = 0.975 + 0.025 * sin(gameTime * 8.0
                      + worldPosition.x * 1.7 + worldPosition.z * 2.3);
     float activeTorchLight = torchLight * dynamicLighting;
@@ -147,7 +145,6 @@ void main() {
 
     vec3 color = texel.rgb * vertexColor.rgb * illumination;
 
-    // Gentle saturation and contrast grading, avoiding crushed blacks.
     float luminance = dot(color, vec3(0.2126, 0.7152, 0.0722));
     color = mix(vec3(luminance), color, 1.10);
     color = max(vec3(0.0), (color - 0.025) * 1.035 + 0.025);
@@ -415,10 +412,10 @@ class Light:
         glUniform1f(self.fog_end_uniform, self.fog_end)
         glUniform1f(self.time_uniform, self.elapsed)
         modelview = self._matrix(GL_MODELVIEW_MATRIX)
-        try:
-            inverse_view = np.linalg.inv(modelview).astype(np.float32)
-        except np.linalg.LinAlgError:
-            inverse_view = np.identity(4, dtype=np.float32)
+        # The camera matrix is always a rigid transform, so its inverse has a
+        # closed form: transpose the rotation and negate the rotated
+        # translation. Replacing np.linalg.inv saves a LAPACK call per frame.
+        inverse_view = self._invert_rigid(modelview)
         glUniformMatrix4fv(self.inverse_view_uniform, 1, GL_TRUE, inverse_view)
         glUniformMatrix4fv(self.shadow_matrix_uniform, 1, GL_TRUE, self.shadow_matrix)
         glUniform1i(self.shadows_enabled_uniform, 1 if self.shadow_ready else 0)
@@ -485,7 +482,11 @@ class Light:
             (0.0, 0.0, 0.5, 0.5),
             (0.0, 0.0, 0.0, 1.0),
         ), dtype=np.float32)
-        self.shadow_matrix = bias @ self._matrix(GL_PROJECTION_MATRIX) @ self._matrix(GL_MODELVIEW_MATRIX)
+        # Single GL query per matrix, avoiding the redundant second read of
+        # the modelview that the previous version performed.
+        projection = self._matrix(GL_PROJECTION_MATRIX)
+        modelview = self._matrix(GL_MODELVIEW_MATRIX)
+        self.shadow_matrix = bias @ projection @ modelview
         self.shadow_ready = True
         return True
 
@@ -559,6 +560,17 @@ class Light:
     def _matrix(which):
         # PyOpenGL exposes OpenGL's column-major matrix transposed.
         return np.asarray(glGetFloatv(which), dtype=np.float32).reshape(4, 4).T
+
+    @staticmethod
+    def _invert_rigid(modelview):
+        """Closed-form inverse for a rotation + translation matrix."""
+        rotation = modelview[:3, :3]
+        translation = modelview[:3, 3]
+        rotation_t = rotation.T
+        inverse = np.identity(4, dtype=np.float32)
+        inverse[:3, :3] = rotation_t
+        inverse[:3, 3] = -rotation_t @ translation
+        return inverse
 
     def _dirty_light_region(self, source):
         cubes = getattr(self.gl, "cubes", None)

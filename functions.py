@@ -7,6 +7,25 @@ import pyglet
 from OpenGL.GL import *
 from settings import *
 
+# Reusable pyglet.text.Label pairs keyed by the owning GL context. The label
+# pool exists to remove the hundreds of short-lived Label allocations that
+# drawInfoLabel used to make every frame from tooltips, F3, buttons, sliders
+# and slot counters.
+_INFO_LABEL_POOL = {}
+
+
+def _info_label_pool(gl, count):
+    pool = _INFO_LABEL_POOL.get(id(gl))
+    if pool is None:
+        pool = []
+        _INFO_LABEL_POOL[id(gl)] = pool
+    while len(pool) < count:
+        pool.append((
+            pyglet.text.Label("", font_name='Minecraft Rus', font_size=15),
+            pyglet.text.Label("", font_name='Minecraft Rus', font_size=15),
+        ))
+    return pool
+
 
 def load_textures(self):
     print("Loading textures...")
@@ -31,10 +50,8 @@ def load_textures(self):
 
                 image = pyglet.image.load(d + '/' + file)
                 if image.width == 1024 and image.height == 1024 or image.width == 512 and image.height == 512 or image.width == 256 and image.height == 256 or image.width == 128 and image.height == 128:
-                    # Adjust loading method for 1024x textures
-                    texture = image.get_texture()  # Example adjustment for higher resolution
+                    texture = image.get_texture()
                 elif image.width == 8 and image.height == 8 or image.width == 16 and image.height == 16 or image.width == 32 and image.height == 32 or image.width == 64 and image.height == 64:
-                    # Continue with the existing method for other resolutions
                     texture = image.get_mipmapped_texture()
                 else:
                     texture = image.get_texture()
@@ -117,14 +134,12 @@ def configure_plant_textures(self):
         image.height = 22
         self.inventory_textures["tall_grass"] = image
 
-    for name in ("leaves_oak", "leaves_taiga", "tall_grass"):
+    for name in ("leaves_oak", "leaves_taiga", "tall_grass", "glass"):
         group = self.texture.get(name)
         if group is None:
             continue
         texture = group.texture
         glBindTexture(texture.target, texture.id)
-        # Generated mipmaps average opaque and transparent texels, filling the
-        # holes at distance. Binary cutouts use nearest sampling instead.
         glTexParameteri(texture.target, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
         glTexParameteri(texture.target, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
 
@@ -171,35 +186,42 @@ def drawInfoLabel(gl, text, xx=0, yy=0, style=None, size=15, anchor_x='left', an
                   label_color=(255, 255, 255), shadow_color=(56, 56, 56), scale=0, shadow=True):
     if style is None:
         style = []
+    lines = text.split("\n")
+    pool = _info_label_pool(gl, len(lines))
     y = -21
     ms = size / 6
-    for i in text.split("\n"):
+    alpha = round(opacity * 255)
+    shadow_rgba = (shadow_color[0], shadow_color[1], shadow_color[2], alpha)
+    label_rgba = (label_color[0], label_color[1], label_color[2], alpha)
+
+    for index, line in enumerate(lines):
+        shadow_lbl, lbl = pool[index]
+
         ix = ms
         iy = gl.HEIGHT + y + yy - ms
         if xx:
             ix = xx + ms
         if yy:
             iy = yy - ms
-        shadow_lbl = pyglet.text.Label(i,
-                                       font_name='Minecraft Rus',
-                                       color=(shadow_color[0], shadow_color[1], shadow_color[2], round(opacity * 255)),
-                                       font_size=size,
-                                       x=ix, y=iy,
-                                       anchor_x=anchor_x,
-                                       anchor_y=anchor_y)
-        lbl = pyglet.text.Label(i,
-                                font_name='Minecraft Rus',
-                                color=(label_color[0], label_color[1], label_color[2], round(opacity * 255)),
-                                font_size=size,
-                                x=ix - ms, y=iy + ms,
-                                anchor_x=anchor_x,
-                                anchor_y=anchor_y)
+
+        for target, tx, ty in ((shadow_lbl, ix, iy),
+                               (lbl, ix - ms, iy + ms)):
+            target.text = line
+            target.font_size = size
+            target.x = tx
+            target.y = ty
+            target.anchor_x = anchor_x
+            target.anchor_y = anchor_y
+
         if not style:
             lbl.set_style("background_color", (69, 69, 69, 100))
         else:
             for st in style:
                 lbl.set_style(st[0], st[1])
                 shadow_lbl.set_style(st[0], st[1])
+        lbl.set_style("color", label_rgba)
+        shadow_lbl.set_style("color", shadow_rgba)
+
         glPushMatrix()
         if rotate:
             glRotatef(rotate, 0.0, 0.0, 1.0)

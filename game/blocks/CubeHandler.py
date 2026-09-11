@@ -1,3 +1,4 @@
+import math
 from collections import deque
 
 from OpenGL.GL import *
@@ -36,12 +37,15 @@ class CubeHandler:
 
         # Render chunks
         self.render_chunks = {}
+        # (cx, cz) -> set of cy. Replaces the linear dict scans in render /
+        # rebuild_dirty_chunks / chunks_within_distance / render_shadow.
+        self._chunks_by_column = {}
         self.RENDER_CHUNK_SIZE = (16, 8, 16)
         self.max_rebuilds_per_frame = 1
         self.rebuild_cube_budget = 256
         self.rebuild_time_budget = 0.004
 
-        # Frustum culling (kept but disabled)
+        # Conservative AABB frustum culling.
         self.frustum = Frustum()
 
     def _get_chunk_key(self, pos):
@@ -50,6 +54,48 @@ class CubeHandler:
         cy = y // self.RENDER_CHUNK_SIZE[1]
         cz = z // self.RENDER_CHUNK_SIZE[2]
         return (cx, cy, cz)
+
+    def _get_or_create_chunk(self, chunk_key):
+        chunk = self.render_chunks.get(chunk_key)
+        if chunk is not None:
+            return chunk
+        chunk = RenderChunk(
+            chunk_key[0], chunk_key[1], chunk_key[2],
+            self.RENDER_CHUNK_SIZE, self.gl,
+        )
+        self.render_chunks[chunk_key] = chunk
+        column_key = (chunk_key[0], chunk_key[2])
+        column = self._chunks_by_column.get(column_key)
+        if column is None:
+            self._chunks_by_column[column_key] = {chunk_key[1]}
+        else:
+            column.add(chunk_key[1])
+        return chunk
+
+    def _iter_chunks_near(self, center, radius):
+        """Yield populated chunks whose column lies inside the radius box.
+
+        Cost scales with the number of loaded chunks inside the box, not with
+        the size of ``render_chunks``. The extra ``+1`` on each end provides a
+        small safety margin so that chunks whose AABB grazes the radius but
+        whose center sits just outside are not culled by the coarse filter.
+        """
+        sx, _, sz = self.RENDER_CHUNK_SIZE
+        cx0 = int((center[0] - radius) // sx) - 1
+        cx1 = int((center[0] + radius) // sx) + 2
+        cz0 = int((center[2] - radius) // sz) - 1
+        cz1 = int((center[2] + radius) // sz) + 2
+        by_column = self._chunks_by_column
+        render_chunks = self.render_chunks
+        for cx in range(cx0, cx1):
+            for cz in range(cz0, cz1):
+                column = by_column.get((cx, cz))
+                if not column:
+                    continue
+                for cy in column:
+                    chunk = render_chunks.get((cx, cy, cz))
+                    if chunk is not None:
+                        yield chunk
 
     def hitTest(self, p, vec, dist=4, include_fluids=False):
         m = 8
@@ -67,6 +113,49 @@ class CubeHandler:
             x, y, z = x + dx, y + dy, z + dz
         return None, None
 
+    def first_committed_solid_on_segment(self, start, end, clearance=0.1):
+        """Return the first rendered opaque voxel crossed by an exact DDA."""
+        delta = tuple(end[index] - start[index] for index in range(3))
+        length = sum(value * value for value in delta) ** 0.5
+        if length <= 1e-9:
+            return None, None
+        stop_t = max(0.0, 1.0 - clearance / length)
+        cell = [math.floor(start[index] + 0.5) for index in range(3)]
+        end_cell = [math.floor(end[index] + 0.5) for index in range(3)]
+        steps = [1 if value > 0 else -1 if value < 0 else 0 for value in delta]
+        t_max = []
+        t_delta = []
+        for axis, value in enumerate(delta):
+            if value > 0:
+                boundary = cell[axis] + 0.5
+                t_max.append((boundary - start[axis]) / value)
+                t_delta.append(1.0 / value)
+            elif value < 0:
+                boundary = cell[axis] - 0.5
+                t_max.append((boundary - start[axis]) / value)
+                t_delta.append(-1.0 / value)
+            else:
+                t_max.append(float("inf"))
+                t_delta.append(float("inf"))
+
+        max_steps = sum(abs(end_cell[index] - cell[index]) for index in range(3)) + 3
+        for _ in range(max_steps):
+            crossing = min(t_max)
+            if crossing >= stop_t:
+                break
+            for axis in range(3):
+                if abs(t_max[axis] - crossing) <= 1e-10:
+                    cell[axis] += steps[axis]
+                    t_max[axis] += t_delta[axis]
+            position = tuple(cell)
+            cube = self.cubes.get(position)
+            if cube is None or cube.type != "solid":
+                continue
+            chunk = self.render_chunks.get(self._get_chunk_key(position))
+            if chunk is not None and not chunk.dirty:
+                return position, crossing * length
+        return None, None
+
     REPLACEABLE = ("water", "lava", "tall_grass")
 
     def add(self, p, t, now=False, fluid_level=0, fluid_source=None, fluid_falling=False):
@@ -81,7 +170,7 @@ class CubeHandler:
                 return False
             self._clear_fluid(p)
         cube = self.cubes[p] = Cube(t, p, self.block[t],
-                                    'alpha' if t in self.alpha_textures else 'blend' if (t == 'water' or t == "lava") else 'solid')
+                                    self.block_render_type(t, self.alpha_textures))
 
         if cube.name not in ('water', 'lava', 'torch', 'tall_grass'):
             self.collidable[p] = cube
@@ -90,12 +179,7 @@ class CubeHandler:
             self.fluids[p] = FluidState(max(0, min(7, fluid_level)), source, fluid_falling)
 
         chunk_key = self._get_chunk_key(p)
-        if chunk_key not in self.render_chunks:
-            self.render_chunks[chunk_key] = RenderChunk(
-                chunk_key[0], chunk_key[1], chunk_key[2],
-                self.RENDER_CHUNK_SIZE, self.gl
-            )
-        self.render_chunks[chunk_key].add_cube(p, cube)
+        self._get_or_create_chunk(chunk_key).add_cube(p, cube)
 
         self._mark_boundary_chunks_dirty(p, chunk_key)
 
@@ -125,8 +209,9 @@ class CubeHandler:
             self.gl.light.removeLightSource(*p)
 
         chunk_key = self._get_chunk_key(p)
-        if chunk_key in self.render_chunks:
-            self.render_chunks[chunk_key].remove_cube(p)
+        chunk = self.render_chunks.get(chunk_key)
+        if chunk is not None:
+            chunk.remove_cube(p)
 
         self._mark_boundary_chunks_dirty(p, chunk_key)
         if was_water or cube.name != "water":
@@ -332,7 +417,7 @@ class CubeHandler:
         if neighbour is None:
             return True
         if cube.name != "water":
-            if cube.name.startswith("leaves_") and neighbour.name == cube.name:
+            if cube.type in ("alpha", "blend") and neighbour.name == cube.name:
                 return False
             return neighbour.type in ('alpha', 'blend')
         if neighbour.name != "water":
@@ -340,6 +425,14 @@ class CubeHandler:
         if face_index in (2, 3):
             return False
         return self.get_water_height(neighbour.p) < self.get_water_height(cube.p)
+
+    @staticmethod
+    def block_render_type(name, alpha_textures):
+        if name in alpha_textures:
+            return "alpha"
+        if name in ("water", "lava"):
+            return "blend"
+        return "solid"
 
     def get_face_vertices(self, cube, face_index):
         if cube.name != "water":
@@ -522,20 +615,14 @@ class CubeHandler:
         if time_budget is None:
             time_budget = self.rebuild_time_budget
 
-        dirty = [chunk for chunk in self.chunks_within_distance(player_pos, render_distance)
+        dirty = [chunk for chunk in self._iter_chunks_near(player_pos, render_distance)
                  if chunk.dirty]
         if not dirty:
             return
 
         def priority(chunk):
-            cx = chunk.cx * self.RENDER_CHUNK_SIZE[0] + self.RENDER_CHUNK_SIZE[0]//2
-            cy = chunk.cy * self.RENDER_CHUNK_SIZE[1] + self.RENDER_CHUNK_SIZE[1]//2
-            cz = chunk.cz * self.RENDER_CHUNK_SIZE[2] + self.RENDER_CHUNK_SIZE[2]//2
-            dx = cx - player_pos[0]
-            dy = cy - player_pos[1]
-            dz = cz - player_pos[2]
-            distance = dx*dx + dy*dy + dz*dz
-            return (chunk._rebuild_items is None, distance)
+            return (chunk._rebuild_items is None,
+                    self.chunk_distance_squared(chunk, player_pos))
 
         dirty.sort(key=priority)
         for chunk in dirty[:max_rebuilds]:
@@ -551,17 +638,27 @@ class CubeHandler:
         if not settings.DISTANCE_CULLING:
             return list(self.render_chunks.values())
 
-        result = []
-        for chunk in self.render_chunks.values():
-            cx = chunk.cx * self.RENDER_CHUNK_SIZE[0] + self.RENDER_CHUNK_SIZE[0] // 2
-            cy = chunk.cy * self.RENDER_CHUNK_SIZE[1] + self.RENDER_CHUNK_SIZE[1] // 2
-            cz = chunk.cz * self.RENDER_CHUNK_SIZE[2] + self.RENDER_CHUNK_SIZE[2] // 2
-            dx = cx - player_pos[0]
-            dy = cy - player_pos[1]
-            dz = cz - player_pos[2]
-            if dx * dx + dy * dy + dz * dz < render_distance * render_distance:
-                result.append(chunk)
-        return result
+        distance_squared = render_distance * render_distance
+        return [
+            chunk for chunk in self._iter_chunks_near(player_pos, render_distance)
+            if self.chunk_distance_squared(chunk, player_pos) <= distance_squared
+        ]
+
+    def chunk_bounds(self, chunk):
+        x0 = chunk.cx * self.RENDER_CHUNK_SIZE[0] - 0.5
+        y0 = chunk.cy * self.RENDER_CHUNK_SIZE[1] - 0.5
+        z0 = chunk.cz * self.RENDER_CHUNK_SIZE[2] - 0.5
+        return (x0, y0, z0,
+                x0 + self.RENDER_CHUNK_SIZE[0],
+                y0 + self.RENDER_CHUNK_SIZE[1],
+                z0 + self.RENDER_CHUNK_SIZE[2])
+
+    def chunk_distance_squared(self, chunk, player_pos):
+        x0, y0, z0, x1, y1, z1 = self.chunk_bounds(chunk)
+        dx = max(x0 - player_pos[0], 0.0, player_pos[0] - x1)
+        dy = max(y0 - player_pos[1], 0.0, player_pos[1] - y1)
+        dz = max(z0 - player_pos[2], 0.0, player_pos[2] - z1)
+        return dx * dx + dy * dy + dz * dz
 
     def render(self, player_pos, render_distance=None):
         if render_distance is None:
@@ -570,32 +667,35 @@ class CubeHandler:
         self.frustum.extract()
 
         visible = []
-        for chunk in self.render_chunks.values():
-            cx = chunk.cx * self.RENDER_CHUNK_SIZE[0] + self.RENDER_CHUNK_SIZE[0]//2
-            cy = chunk.cy * self.RENDER_CHUNK_SIZE[1] + self.RENDER_CHUNK_SIZE[1]//2
-            cz = chunk.cz * self.RENDER_CHUNK_SIZE[2] + self.RENDER_CHUNK_SIZE[2]//2
-            dx = cx - player_pos[0]
-            dy = cy - player_pos[1]
-            dz = cz - player_pos[2]
-            distance_squared = dx*dx + dy*dy + dz*dz
+        render_distance_squared = render_distance * render_distance
+        for chunk in self._iter_chunks_near(player_pos, render_distance):
+            distance_squared = self.chunk_distance_squared(chunk, player_pos)
             # Distance check – only if culling is enabled
             if settings.DISTANCE_CULLING:
-                if distance_squared > render_distance*render_distance:
+                if distance_squared > render_distance_squared:
                     continue
 
-            x0 = chunk.cx * self.RENDER_CHUNK_SIZE[0] - 0.5
-            y0 = chunk.cy * self.RENDER_CHUNK_SIZE[1] - 0.5
-            z0 = chunk.cz * self.RENDER_CHUNK_SIZE[2] - 0.5
-            x1 = x0 + self.RENDER_CHUNK_SIZE[0]
-            y1 = y0 + self.RENDER_CHUNK_SIZE[1]
-            z1 = z0 + self.RENDER_CHUNK_SIZE[2]
+            x0, y0, z0, x1, y1, z1 = self.chunk_bounds(chunk)
             if not self.frustum.cube_in_frustum(x0, y0, z0, x1, y1, z1):
                 continue
 
-            visible.append((distance_squared, chunk))
+            center_x = (x0 + x1) / 2
+            center_y = (y0 + y1) / 2
+            center_z = (z0 + z1) / 2
+            center_distance = ((center_x - player_pos[0]) ** 2
+                               + (center_y - player_pos[1]) ** 2
+                               + (center_z - player_pos[2]) ** 2)
+            visible.append((center_distance, chunk))
 
-        for _, chunk in visible:
-            chunk.render_opaque()
+        visible.sort(key=lambda item: item[0])
+        glPushAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+        try:
+            glDisable(GL_BLEND)
+            glDepthMask(GL_TRUE)
+            for _, chunk in visible:
+                chunk.render_opaque()
+        finally:
+            glPopAttrib()
 
         # Binary foliage/plant cutouts write depth only for genuinely opaque
         # texels. Keeping blending off prevents partial mip alpha from hiding
@@ -611,7 +711,7 @@ class CubeHandler:
             glPopAttrib()
 
         # tinted grass side overlays: alpha cut-outs sitting on the dirt sides
-        glPushAttrib(GL_ENABLE_BIT | GL_DEPTH_BUFFER_BIT)
+        glPushAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
         try:
             glEnable(GL_BLEND)
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
@@ -622,12 +722,12 @@ class CubeHandler:
         finally:
             glPopAttrib()
 
-        self.visible_water_chunks = sorted(visible, key=lambda item: item[0], reverse=True)
+        self.visible_water_chunks = list(reversed(visible))
 
     def render_shadow(self, center, radius):
         """Render nearby opaque chunk geometry into the sun/moon depth map."""
         radius_squared = radius * radius
-        for chunk in self.render_chunks.values():
+        for chunk in self._iter_chunks_near(center, radius):
             cx = chunk.cx * self.RENDER_CHUNK_SIZE[0] + self.RENDER_CHUNK_SIZE[0] / 2
             cz = chunk.cz * self.RENDER_CHUNK_SIZE[2] + self.RENDER_CHUNK_SIZE[2] / 2
             cy = chunk.cy * self.RENDER_CHUNK_SIZE[1] + self.RENDER_CHUNK_SIZE[1] / 2
@@ -636,11 +736,12 @@ class CubeHandler:
                 chunk.render_shadow()
 
     def render_water(self):
-        glDepthMask(GL_FALSE)
+        glPushAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
         try:
             glEnable(GL_BLEND)
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+            glDepthMask(GL_FALSE)
             for _, chunk in self.visible_water_chunks:
                 chunk.render_water()
         finally:
-            glDepthMask(GL_TRUE)
+            glPopAttrib()

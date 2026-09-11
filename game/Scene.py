@@ -21,6 +21,8 @@ import settings as game_settings
 
 
 class Scene:
+    NEAR_PLANE = 0.25
+
     def __init__(self):
         print("Init Scene class...")
         logging.debug("Init Scene class...")
@@ -43,6 +45,8 @@ class Scene:
         self.mod_alpha_textures = set()
         self.mod_loader = None
         self.show_hitboxes = False
+        self._entity_occlusion = {}
+        self._occlusion_cursor = 0
         self.skyColor = [128, 179, 255]
         self.panorama = {}
         self.water_overlay = None
@@ -57,12 +61,21 @@ class Scene:
         if previous_light is not None:
             previous_light.close()
         self.entity.clear()
+        self._entity_occlusion.clear()
+        self._occlusion_cursor = 0
         self.allowEvents = {
             "movePlayer": True,
             "grabMouse": True,
             "keyboardAndMouse": True,
             "showCrosshair": True,
         }
+
+        # Cached static sky geometry. Rebuilt lazily on first draw after a
+        # world reset, because the star field depends on the fresh DayNightCycle.
+        self._sky_vertex_list = None
+        self._sky_t_values = ()
+        self._star_vertex_list = None
+        self._galaxy_vertex_list = None
 
         self.clouds = Clouds(self)
         self.droppedBlock = droppedBlock(self)
@@ -123,7 +136,6 @@ class Scene:
         glEnable(GL_DEPTH_TEST)
         glDepthFunc(GL_LESS)
         glShadeModel(GL_SMOOTH)
-        glDepthFunc(GL_LEQUAL)
         glEnable(GL_ALPHA_TEST)
         glAlphaFunc(GL_GREATER, 0.1)
         glEnable(GL_BLEND)
@@ -147,7 +159,7 @@ class Scene:
             None,
             self.block,
             None,
-            tuple({'leaves_taiga', 'leaves_oak', 'tall_grass', 'nocolor', 'sapling', 'torch'}
+            tuple({'leaves_taiga', 'leaves_oak', 'tall_grass', 'nocolor', 'sapling', 'torch', 'glass'}
                   | self.mod_alpha_textures),
             self
         )
@@ -156,6 +168,10 @@ class Scene:
         self.set3d()
 
     def set2d(self):
+        # UI quads and glyphs share Z=0. Keeping GL_LESS active lets the first
+        # background pixel reject every later button/text pixel at equal depth.
+        glDisable(GL_DEPTH_TEST)
+        glDepthMask(GL_FALSE)
         glMatrixMode(GL_PROJECTION)
         glLoadIdentity()
         gluOrtho2D(0, self.WIDTH, 0, self.HEIGHT)
@@ -163,9 +179,12 @@ class Scene:
         glLoadIdentity()
 
     def set3d(self):
+        glEnable(GL_DEPTH_TEST)
+        glDepthMask(GL_TRUE)
+        glDepthFunc(GL_LESS)
         glMatrixMode(GL_PROJECTION)
         glLoadIdentity()
-        gluPerspective(self.fov, (self.WIDTH / self.HEIGHT), 0.1, RENDER_DISTANCE)
+        gluPerspective(self.fov, (self.WIDTH / self.HEIGHT), self.NEAR_PLANE, RENDER_DISTANCE)
         glMatrixMode(GL_MODELVIEW)
         glLoadIdentity()
 
@@ -309,13 +328,8 @@ class Scene:
         try:
             self.cubes.render(self.player.position)
 
-            entity_distance = CHUNKS_RENDER_DISTANCE * CHUNKS_RENDER_DISTANCE
-            for i in self.entity:
-                dx = i.position[0] - self.player.position[0]
-                dy = i.position[1] - self.player.position[1]
-                dz = i.position[2] - self.player.position[2]
-                if dx * dx + dy * dy + dz * dz <= entity_distance:
-                    i.render(dt)
+            for entity in self._visible_entities():
+                entity.render(dt)
 
             self.cubes.render_water()
             self.particles.drawParticles(dt)
@@ -328,8 +342,9 @@ class Scene:
                 self.mod_loader.post("render_world", scene=self, dt=dt)
         finally:
             self.light.end_render()
-        self.stuffBatch.dispose()
-        self.stuffBatch = DisposableBatch()
+        # Reset, not dispose: reusing the same batch keeps Pyglet's shared
+        # vertex domains (and their GPU buffers) alive between frames.
+        self.stuffBatch.reset()
 
         if self.show_hitboxes:
             self.drawEntityHitboxes()
@@ -359,6 +374,70 @@ class Scene:
         glDisable(GL_MULTISAMPLE)
         return False
 
+    def _ensure_sky_geometry(self):
+        if self._sky_vertex_list is not None:
+            return
+        radius = 90.0
+        rings, segments = 10, 40
+        vertices, t_values = [], []
+        for ring in range(rings):
+            t0 = ring / rings
+            t1 = (ring + 1) / rings
+            a0 = t0 * math.pi / 2
+            a1 = t1 * math.pi / 2
+            y0, y1 = math.sin(a0) * radius, math.sin(a1) * radius
+            r0, r1 = math.cos(a0) * radius, math.cos(a1) * radius
+            for segment in range(segments):
+                s0 = segment / segments * math.tau
+                s1 = (segment + 1) / segments * math.tau
+                c0, sn0 = math.cos(s0), math.sin(s0)
+                c1, sn1 = math.cos(s1), math.sin(s1)
+                # Lower triangle
+                vertices += (c0 * r0, y0, sn0 * r0,
+                             c0 * r1, y1, sn0 * r1,
+                             c1 * r1, y1, sn1 * r1)
+                t_values += (t0, t1, t1)
+                # Upper triangle
+                vertices += (c0 * r0, y0, sn0 * r0,
+                             c1 * r1, y1, sn1 * r1,
+                             c1 * r0, y0, sn1 * r0)
+                t_values += (t0, t1, t0)
+        count = len(vertices) // 3
+        self._sky_t_values = t_values
+        self._sky_vertex_list = pyglet.graphics.vertex_list(
+            count,
+            ('v3f/static', tuple(vertices)),
+            ('c3f/dynamic', tuple([0.0] * (count * 3))),
+        )
+
+    def _ensure_star_geometry(self):
+        if self._star_vertex_list is not None:
+            return
+        stars = self.dayNight.stars
+        galaxy = self.dayNight.galaxy_stars
+        radius = 80.0
+
+        star_vs, star_cs = [], []
+        for sx, sy, sz in stars:
+            star_vs += (sx * radius, sy * radius, sz * radius)
+            star_cs += (1.0, 1.0, 1.0, 1.0)
+        self._star_vertex_list = pyglet.graphics.vertex_list(
+            len(stars),
+            ('v3f/static', tuple(star_vs)),
+            ('c4f/dynamic', tuple(star_cs)),
+        )
+
+        galaxy_vs, galaxy_cs = [], []
+        for sx, sy, sz, intensity, blue in galaxy:
+            galaxy_vs += (sx * radius, sy * radius, sz * radius)
+            galaxy_cs += (0.72 * intensity, 0.78 * intensity,
+                          blue * intensity, intensity)
+        self._galaxy_vertex_list = pyglet.graphics.vertex_list(
+            len(galaxy),
+            ('v3f/static', tuple(galaxy_vs)),
+            ('c4f/dynamic', tuple(galaxy_cs)),
+        )
+
     def drawCelestialSky(self):
         """Draw the moving sun, moon and night stars behind the world."""
         px, py, pz = self.player.position
@@ -374,21 +453,23 @@ class Scene:
             glEnable(GL_POINT_SMOOTH)
 
             if self.dayNight.star_brightness > 0:
-                glPointSize(1.6)
+                self._ensure_star_geometry()
                 brightness = self.dayNight.star_brightness
-                glColor4f(brightness, brightness, brightness, brightness)
-                glBegin(GL_POINTS)
-                for sx, sy, sz in self.dayNight.stars:
-                    glVertex3f(px + sx * radius, py + sy * radius, pz + sz * radius)
-                glEnd()
+                star_count = len(self.dayNight.stars)
+                self._star_vertex_list.colors = tuple([brightness] * (star_count * 4))
+                glPointSize(1.6)
+                glPushMatrix()
+                glTranslatef(px, py, pz)
+                self._star_vertex_list.draw(GL_POINTS)
 
+                galaxy_colors = []
+                for _, _, _, intensity, blue in self.dayNight.galaxy_stars:
+                    a = brightness * intensity
+                    galaxy_colors.extend((a * 0.72, a * 0.78, a * blue, a))
+                self._galaxy_vertex_list.colors = tuple(galaxy_colors)
                 glPointSize(1.2)
-                glBegin(GL_POINTS)
-                for sx, sy, sz, intensity, blue in self.dayNight.galaxy_stars:
-                    alpha = brightness * intensity
-                    glColor4f(alpha * 0.72, alpha * 0.78, alpha * blue, alpha)
-                    glVertex3f(px + sx * radius, py + sy * radius, pz + sz * radius)
-                glEnd()
+                self._galaxy_vertex_list.draw(GL_POINTS)
+                glPopMatrix()
 
             glEnable(GL_TEXTURE_2D)
             glEnable(GL_BLEND)
@@ -414,14 +495,24 @@ class Scene:
             glPopAttrib()
 
     def drawAtmosphereSky(self):
-        """Draw a smooth horizon-to-zenith atmospheric gradient dome."""
-        px, py, pz = self.player.position
-        radius = 90.0
-        rings = 10
-        segments = 40
+        """Draw a smooth horizon-to-zenith atmospheric gradient dome.
+
+        The geometry is precomputed once into a static vertex list; only the
+        vertex colors change per frame, which removes ~800 immediate-mode
+        vertices from the per-frame path.
+        """
+        self._ensure_sky_geometry()
         horizon = self.dayNight.horizon_color
         zenith = self.dayNight.zenith_color
+        hr, hg, hb = horizon
+        dr, dg, db = zenith[0] - hr, zenith[1] - hg, zenith[2] - hb
+        self._sky_vertex_list.colors = tuple(
+            component
+            for t in self._sky_t_values
+            for component in (hr + dr * t, hg + dg * t, hb + db * t)
+        )
 
+        px, py, pz = self.player.position
         glPushAttrib(GL_ENABLE_BIT | GL_DEPTH_BUFFER_BIT | GL_CURRENT_BIT)
         try:
             glDisable(GL_TEXTURE_2D)
@@ -431,27 +522,7 @@ class Scene:
             glDepthMask(GL_FALSE)
             glPushMatrix()
             glTranslatef(px, py, pz)
-
-            for ring in range(rings):
-                t0 = ring / rings
-                t1 = (ring + 1) / rings
-                angle0 = t0 * math.pi / 2
-                angle1 = t1 * math.pi / 2
-                y0, y1 = math.sin(angle0) * radius, math.sin(angle1) * radius
-                r0, r1 = math.cos(angle0) * radius, math.cos(angle1) * radius
-                color0 = tuple(horizon[i] + (zenith[i] - horizon[i]) * t0 for i in range(3))
-                color1 = tuple(horizon[i] + (zenith[i] - horizon[i]) * t1 for i in range(3))
-
-                glBegin(GL_QUAD_STRIP)
-                for segment in range(segments + 1):
-                    angle = segment / segments * math.tau
-                    cosine, sine = math.cos(angle), math.sin(angle)
-                    glColor3f(*color0)
-                    glVertex3f(cosine * r0, y0, sine * r0)
-                    glColor3f(*color1)
-                    glVertex3f(cosine * r1, y1, sine * r1)
-                glEnd()
-
+            self._sky_vertex_list.draw(GL_TRIANGLES)
             glPopMatrix()
         finally:
             glDepthMask(GL_TRUE)
@@ -553,6 +624,9 @@ class Scene:
             return
         if not self.light.begin_shadow_pass(self.player.position, self.dayNight.light_direction):
             return
+        world_batch = self.stuffBatch
+        shadow_entity_batch = DisposableBatch()
+        self.stuffBatch = shadow_entity_batch
         try:
             self.cubes.render_shadow(self.player.position, self.light.SHADOW_RADIUS * 2.0)
 
@@ -565,16 +639,17 @@ class Scene:
                         and dx * dx + dy * dy + dz * dz <= entity_shadow_distance):
                     entity.render(0)
 
-            # At this point the dynamic batch contains dropped/block entities;
-            # particles are added later and clouds have their own renderer.
             try:
-                self.stuffBatch.draw()
+                world_batch.draw()
+                shadow_entity_batch.draw()
             except pyglet.gl.lib.GLException:
                 logging.exception("Block entity shadow pass failed")
 
             if game_settings.PLAYER_SHADOWS and not self.player.is_spectator:
                 self.drawPlayerShadowCaster()
         finally:
+            self.stuffBatch = world_batch
+            shadow_entity_batch.dispose()
             self.light.end_shadow_pass()
 
     def drawPlayerShadowCaster(self):
@@ -613,6 +688,160 @@ class Scene:
         entities = {"cow": Cow, "sheep": Sheep, "zombie": Zombie}
         entities.update(self.mod_entity_types)
         return entities
+
+    def _prove_entity_occluded(self, camera, bounds):
+        """Cull only when one committed opaque voxel covers the whole AABB."""
+        center = tuple((bounds[index] + bounds[index + 3]) / 2 for index in range(3))
+        blocker, _ = self.cubes.first_committed_solid_on_segment(camera, center)
+        if blocker is None:
+            return None
+        return blocker if Scene._blocker_covers_bounds(camera, bounds, blocker) else None
+
+    @staticmethod
+    def _blocker_covers_bounds(camera, bounds, blocker):
+        inset = 0.02
+        blocker_bounds = (
+            blocker[0] - 0.5 + inset, blocker[1] - 0.5 + inset,
+            blocker[2] - 0.5 + inset, blocker[0] + 0.5 - inset,
+            blocker[1] + 0.5 - inset, blocker[2] + 0.5 - inset,
+        )
+        corners = tuple(
+            (x, y, z)
+            for x in (bounds[0], bounds[3])
+            for y in (bounds[1], bounds[4])
+            for z in (bounds[2], bounds[5])
+        )
+        if all(Scene._segment_crosses_aabb(camera, corner, blocker_bounds)
+               for corner in corners):
+            return True
+        return False
+
+    def _visible_entities(self):
+        max_distance_squared = CHUNKS_RENDER_DISTANCE * CHUNKS_RENDER_DISTANCE
+        candidates = []
+        for entity in self.entity:
+            if getattr(entity, "is_dead", False):
+                continue
+            dx = entity.position[0] - self.player.position[0]
+            dy = entity.position[1] - self.player.position[1]
+            dz = entity.position[2] - self.player.position[2]
+            if dx * dx + dy * dy + dz * dz > max_distance_squared:
+                continue
+            bounds_getter = getattr(entity, "get_visibility_bounds", None)
+            if bounds_getter is None:
+                candidates.append((entity, None))
+                continue
+            bounds = tuple(bounds_getter())
+            if self.cubes.frustum.cube_in_frustum(*bounds):
+                candidates.append((entity, bounds))
+
+        active = {id(entity) for entity, _ in candidates}
+        self._entity_occlusion = {
+            key: value for key, value in self._entity_occlusion.items() if key in active
+        }
+        if not candidates:
+            self._occlusion_cursor = 0
+            return []
+
+        check_count = min(4, len(candidates))
+        scheduled = {
+            (self._occlusion_cursor + offset) % len(candidates)
+            for offset in range(check_count)
+        }
+        self._occlusion_cursor = (self._occlusion_cursor + check_count) % len(candidates)
+        camera = (
+            self.player.position[0],
+            self.player.position[1] - self.player.shift - self.player.cameraShake[0],
+            self.player.position[2],
+        )
+        now = self.light.elapsed
+        visible = []
+        for index, (entity, bounds) in enumerate(candidates):
+            if bounds is None or self._bounds_distance_squared(camera, bounds) < 64.0:
+                self._entity_occlusion.pop(id(entity), None)
+                visible.append(entity)
+                continue
+
+            key = id(entity)
+            cached = self._entity_occlusion.get(key)
+            if cached is not None and cached["state"] == "occluded":
+                if (self._committed_blocker(cached["blocker"])
+                        and self._blocker_covers_bounds(camera, bounds, cached["blocker"])):
+                    cached["camera"] = camera
+                    cached["bounds"] = bounds
+                    continue
+                self._entity_occlusion.pop(key, None)
+                cached = None
+
+            if index not in scheduled:
+                visible.append(entity)
+                continue
+            if (cached is not None and cached["state"] == "visible"
+                    and now < cached["next_check"]):
+                visible.append(entity)
+                continue
+
+            blocker = self._prove_entity_occluded(camera, bounds)
+            if blocker is None:
+                self._entity_occlusion[key] = {
+                    "state": "visible", "next_check": now + 0.1,
+                }
+                visible.append(entity)
+                continue
+            confirmations = 1
+            if (cached is not None and cached.get("state") == "pending"
+                    and cached.get("blocker") == blocker):
+                confirmations = cached["confirmations"] + 1
+            if confirmations >= 2:
+                self._entity_occlusion[key] = {
+                    "state": "occluded", "blocker": blocker,
+                    "camera": camera, "bounds": bounds,
+                }
+                continue
+            self._entity_occlusion[key] = {
+                "state": "pending", "blocker": blocker,
+                "camera": camera, "bounds": bounds,
+                "confirmations": confirmations,
+            }
+            visible.append(entity)
+        return visible
+
+    def _committed_blocker(self, position):
+        cube = self.cubes.cubes.get(position)
+        if cube is None or cube.type != "solid":
+            return False
+        chunk = self.cubes.render_chunks.get(self.cubes._get_chunk_key(position))
+        return chunk is not None and not chunk.dirty
+
+    @staticmethod
+    def _bounds_distance_squared(point, bounds):
+        dx = max(bounds[0] - point[0], 0.0, point[0] - bounds[3])
+        dy = max(bounds[1] - point[1], 0.0, point[1] - bounds[4])
+        dz = max(bounds[2] - point[2], 0.0, point[2] - bounds[5])
+        return dx * dx + dy * dy + dz * dz
+
+    @staticmethod
+    def _segment_crosses_aabb(start, end, bounds, clearance=0.1):
+        delta = tuple(end[index] - start[index] for index in range(3))
+        length = math.sqrt(sum(value * value for value in delta))
+        if length <= 1e-9:
+            return False
+        entry, leave = 0.0, 1.0
+        for axis in range(3):
+            low, high = bounds[axis], bounds[axis + 3]
+            if abs(delta[axis]) <= 1e-12:
+                if start[axis] < low or start[axis] > high:
+                    return False
+                continue
+            first = (low - start[axis]) / delta[axis]
+            second = (high - start[axis]) / delta[axis]
+            if first > second:
+                first, second = second, first
+            entry = max(entry, first)
+            leave = min(leave, second)
+            if entry > leave:
+                return False
+        return leave >= 0.0 and entry * length < length - clearance
 
     def hitTestEntity(self, origin, direction, max_distance=3.0):
         """Return the closest visible entity under the crosshair."""

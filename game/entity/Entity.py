@@ -48,6 +48,12 @@ class Entity:
             self.position[0] + half_width, ground + self.height, self.position[2] + half_width,
         )
 
+    def get_visibility_bounds(self):
+        """Conservative bounds covering the model's animated visual envelope."""
+        x0, y0, z0, x1, y1, z1 = self.get_hitbox()
+        return (x0 - 1.25, y0 - 1.5, z0 - 1.25,
+                x1 + 1.25, y1 + 1.5, z1 + 1.25)
+
     def hurt(self, damage, attacker=None):
         if self.is_dead or self.hurt_cooldown > 0:
             return False

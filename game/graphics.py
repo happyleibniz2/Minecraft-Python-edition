@@ -4,7 +4,14 @@ import pyglet
 
 
 class DisposableBatch(pyglet.graphics.Batch):
-    """A Batch that can explicitly release its vertex-domain reference cycles."""
+    """A Batch with a cheap per-frame reset and an explicit disposal.
+
+    ``reset`` frees only the vertex lists added since the last call and clears
+    the per-batch group map, keeping Pyglet's shared GPU vertex domains alive.
+    ``dispose`` performs a full teardown and should only be used when the
+    batch itself is being discarded (scene reset, chunk rebuild that swaps in
+    a new batch).
+    """
 
     def __init__(self):
         super().__init__()
@@ -15,28 +22,18 @@ class DisposableBatch(pyglet.graphics.Batch):
         self.vertex_lists.append(vertex_list)
         return vertex_list
 
-    def dispose(self):
-        domains = {
-            domain
-            for domain_map in self.group_map.values()
-            for domain in domain_map.values()
-        }
-        for vertex_list in self.vertex_lists:
+    def reset(self):
+        """Delete this frame's vertex lists, keep the batch reusable."""
+        lists, self.vertex_lists = self.vertex_lists, []
+        for vertex_list in lists:
             try:
                 vertex_list.delete()
             except Exception:
                 pass
-        self.vertex_lists.clear()
+        # Pyglet's group_map still references the deleted vertex lists, which
+        # would make the next draw call touch freed GL buffers.
+        self.group_map.clear()
 
-        # Pyglet 1.5's domain buffers and attributes reference each other.
-        # Break that cycle now instead of waiting for an unpredictable GC frame.
-        for domain in domains:
-            try:
-                domain.__del__()
-            except Exception:
-                pass
-        try:
-            self.invalidate()
-            self._update_draw_list()
-        except Exception:
-            pass
+    def dispose(self):
+        """Full teardown. Only call when the batch is being thrown away."""
+        self.reset()

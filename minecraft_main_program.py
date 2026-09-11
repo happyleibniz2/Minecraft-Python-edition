@@ -44,6 +44,7 @@ def log_deb(msg):
 
 def create_opengl_display(size, flags):
     """Create every GL context with a safe 4x-MSAA fallback."""
+    pygame.display.gl_set_attribute(pygame.GL_DEPTH_SIZE, 24)
     # Always request a multisample-capable framebuffer so the setting can be
     # toggled at runtime; Scene.setAntialiasing controls whether it is active.
     samples = 4
@@ -401,6 +402,7 @@ def pause_menu(mc):
 
 def gen_world(mc):
     global IN_MENU, PAUSE, resizeEvent
+    scene.set2d()
     chunk_cnt = 220
     tex = gui.GUI_TEXTURES["options_background"]
     tex2 = gui.GUI_TEXTURES["black"]

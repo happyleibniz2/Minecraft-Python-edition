@@ -7,6 +7,8 @@ class Frustum:
     Extracts and tests against the view frustum.
     Exact translation of RubyDung's Frustum.java.
     """
+    CULLING_MARGIN = 0.5
+
     def __init__(self):
         self.planes = np.zeros((6, 4), dtype=np.float32)
 
@@ -50,6 +52,7 @@ class Frustum:
             x = x1 if plane[0] >= 0 else x0
             y = y1 if plane[1] >= 0 else y0
             z = z1 if plane[2] >= 0 else z0
-            if plane[0] * x + plane[1] * y + plane[2] * z + plane[3] <= 0:
+            if (plane[0] * x + plane[1] * y + plane[2] * z + plane[3]
+                    < -self.CULLING_MARGIN):
                 return False
         return True
