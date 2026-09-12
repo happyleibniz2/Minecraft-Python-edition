@@ -10,3 +10,6 @@ aldiskdagda
 /__pycache__
 /saves
 *.pyc
+
+mods/*
+!mods/README.md
