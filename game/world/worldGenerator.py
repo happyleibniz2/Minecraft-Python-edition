@@ -8,33 +8,6 @@ from game.world.PerlinNoise import PerlinNoise
 from settings import *
 
 
-class _HashRng:
-    """Deterministic per-column RNG built on worldGenerator._random_at.
-
-    Avoids allocating a ``random.Random`` (which seeds a full MT state) for
-    every generated column. Only the methods the column generator and tree
-    spawner actually use are implemented.
-    """
-
-    __slots__ = ("world", "x", "z", "counter")
-
-    def __init__(self, world, x, z):
-        self.world = world
-        self.x = x
-        self.z = z
-        self.counter = 0
-
-    def randint(self, low, high):
-        value = self.world._random_at(self.x, self.counter, self.z, 0xC011)
-        self.counter += 1
-        return low + int(value * (high - low + 1))
-
-    def random(self):
-        value = self.world._random_at(self.x, self.counter, self.z, 0xC011)
-        self.counter += 1
-        return value
-
-
 class worldGenerator:
     MIN_Y = WORLD_MIN_Y
     MAX_Y = WORLD_MAX_Y
@@ -74,6 +47,7 @@ class worldGenerator:
         self._biome_cache = {}
 
     def add(self, p, t):
+        # one dict lookup instead of a membership test plus an insert
         blocks = self.blocks
         if blocks.get(p) is None:
             blocks[p] = t
@@ -188,7 +162,7 @@ class worldGenerator:
         biome_name = self.sample_biome(x, z)
         (_active_biome, grass, dirt, stone,
           ch, is_ocean, is_woodland, plant) = self._biome_data(biome_name)
-        rng = _HashRng(self, x, z)
+        rng = random.Random(self._coordinate_seed(x, 0, z, 0xC011))
         spawnTree = rng.randint(0, ch) == 20 and y > sea_level + 1 and not is_ocean
 
         surface_open = not is_ocean and self.is_cave(x, y, z, y)
@@ -206,11 +180,6 @@ class worldGenerator:
             for cactus_y in range(y + 1, y + rng.randint(2, 3) + 1):
                 add((x, cactus_y, z), "cactus")
 
-        # Below a handful of blocks of overburden, cave noise can never fire,
-        # so the per-block carve test is skipped entirely on very shallow
-        # columns. The remaining columns still call is_cave as usual.
-        can_carve = y > self.MIN_Y + 8
-
         surface_depth = rng.randint(3, 5)
         for block_y in range(self.MIN_Y, y):
             if block_y == self.MIN_Y:
@@ -221,16 +190,11 @@ class worldGenerator:
                 if rng.random() < bedrock_chance:
                     add((x, block_y, z), "bedrock")
                     continue
-            if can_carve and self.is_cave(x, block_y, z, y):
+            if self.is_cave(x, block_y, z, y):
                 continue
             depth = y - block_y
             material = dirt if depth <= surface_depth else stone
-            # Cheap pre-filter: _ore_at itself rejects ~72% of blocks with the
-            # same 0x0AF hash, so probing that hash first skips the remaining
-            # ore-selection work for the overwhelming majority of stone.
-            ore = None
-            if depth > surface_depth and self._random_at(x, block_y, z, 0x0AF) < 0.72:
-                ore = self._ore_at(x, block_y, z, biome_name)
+            ore = self._ore_at(x, block_y, z, biome_name) if depth > surface_depth else None
             add((x, block_y, z), ore or material)
 
     @staticmethod
@@ -244,8 +208,15 @@ class worldGenerator:
 
     @staticmethod
     def _evict_some(cache, limit):
-        """Drop roughly a quarter of the entries instead of flushing."""
-        target = len(cache) - (limit * 3 // 4)
+        """Drop roughly a quarter of the entries instead of flushing.
+
+        A full clear caused periodic recompute avalanches on every cache
+        overflow while travelling; keeping recently inserted entries hot
+        removes those hitches without growing the cache past its limit.
+        This is purely a performance change and does not affect the values
+        that are cached or returned.
+        """
+        target = max(1, len(cache) - (limit * 3 // 4))
         for key in list(cache.keys())[:target]:
             cache.pop(key, None)
 
@@ -324,19 +295,12 @@ class worldGenerator:
         offsets = self._noise_offsets
         noise = self.worldPerlin.noise
         depth = surface - y
-
-        # Cheese caverns only open up below a few blocks of overburden and
-        # their threshold rises with depth. Restructuring the branch means the
-        # noise call is skipped entirely in the shallow band where the feature
-        # cannot fire, which is a large share of the near-surface column.
-        if depth >= 5:
-            cheese = noise((x + offsets[0]) / 44, (y + offsets[14]) / 34,
-                           (z + offsets[1]) / 44)
-            openness = self._clamp((depth - 5) / 48, 0.0, 1.0)
-            threshold = 0.46 - openness * 0.10
-            if cheese > threshold:
-                return True
-
+        openness = self._clamp((depth - 5) / 48, 0.0, 1.0)
+        cheese = noise((x + offsets[0]) / 44, (y + offsets[14]) / 34,
+                       (z + offsets[1]) / 44)
+        threshold = 0.62 if depth < 5 else 0.46 - openness * 0.10
+        if cheese > threshold:
+            return True
         tunnel_a = abs(noise((x + offsets[4]) / 23, (y + offsets[15]) / 19,
                              (z + offsets[5]) / 23))
         if tunnel_a >= 0.045:

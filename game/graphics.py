@@ -6,8 +6,8 @@ import pyglet
 class DisposableBatch(pyglet.graphics.Batch):
     """A Batch with a cheap per-frame reset and an explicit disposal.
 
-    ``reset`` frees only the vertex lists added since the last call and clears
-    the per-batch group map, keeping Pyglet's shared GPU vertex domains alive.
+    ``reset`` frees only the vertex lists added since the last call, leaving
+    Pyglet's shared GPU vertex domains and its internal group map intact.
     ``dispose`` performs a full teardown and should only be used when the
     batch itself is being discarded (scene reset, chunk rebuild that swaps in
     a new batch).
@@ -30,9 +30,6 @@ class DisposableBatch(pyglet.graphics.Batch):
                 vertex_list.delete()
             except Exception:
                 pass
-        # Pyglet's group_map still references the deleted vertex lists, which
-        # would make the next draw call touch freed GL buffers.
-        self.group_map.clear()
 
     def dispose(self):
         """Full teardown. Only call when the batch is being thrown away."""

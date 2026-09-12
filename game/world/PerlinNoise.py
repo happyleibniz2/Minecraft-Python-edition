@@ -24,19 +24,9 @@ class PerlinNoise(threading.Thread):
         value = int(total * self.avg)
 
         if len(cache) >= self._cache_limit:
-            self._evict_cache(cache)
+            cache.clear()
         cache[key] = value
         return value
-
-    @staticmethod
-    def _evict_cache(cache):
-        # Drop the oldest quarter instead of the whole cache. A full clear
-        # caused periodic recompute avalanches on every cache overflow while
-        # travelling; keeping recently inserted entries hot removes those
-        # hitches without growing the cache past its limit.
-        target = len(cache) // 4
-        for key in list(cache.keys())[:target]:
-            cache.pop(key, None)
 
     def __init__(self, seed=10000, mh=0):
         super().__init__()
