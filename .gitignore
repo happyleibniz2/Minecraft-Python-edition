@@ -13,3 +13,4 @@ aldiskdagda
 
 mods/*
 !mods/README.md
+/saves/Current_world
