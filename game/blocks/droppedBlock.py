@@ -20,13 +20,15 @@ class droppedBlock:
         for key, entry in tuple(self.blocks.items()):
             entry[7] = max(0.0, entry[7] - dt)
             self._update_physics(entry, dt)
-            pp = list(self.gl.player.position)
+            player = self.gl.player
+            feet_y = player.position[1] - player.FEET_OFFSET
+            pp = (player.position[0], feet_y, player.position[2])
 
             dx = pp[0] - entry[0][0]
             dy = pp[1] - entry[0][1]
             dz = pp[2] - entry[0][2]
             if (entry[7] <= 0 and dx * dx + dy * dy + dz * dz <= 2.25
-                    and self.gl.player.hp > 0):
+                    and player.hp > 0):
                 leftover = self.gl.player.inventory.addBlock(entry[1], entry[8])
                 if leftover < entry[8]:
                     self.gl.blockSound.playPickUpSound()

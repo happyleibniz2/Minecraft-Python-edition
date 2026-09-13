@@ -227,11 +227,11 @@ class worldGenerator:
             return cached
         offsets = self._noise_offsets
         noise = self.worldPerlin.noise2d
-        continentalness = noise((x + offsets[0]) / 420, (z + offsets[1]) / 420)
-        erosion = noise((x + offsets[2]) / 180, (z + offsets[3]) / 180)
-        ridge_noise = noise((x + offsets[4]) / 105, (z + offsets[5]) / 105)
-        detail = noise((x + offsets[6]) / 38, (z + offsets[7]) / 38)
-        valley = abs(noise((x + offsets[8]) / 125, (z + offsets[9]) / 125))
+        continentalness = noise((x + offsets[0]) / 480, (z + offsets[1]) / 480)
+        erosion = noise((x + offsets[2]) / 200, (z + offsets[3]) / 200)
+        ridge_noise = noise((x + offsets[4]) / 120, (z + offsets[5]) / 120)
+        detail = noise((x + offsets[6]) / 45, (z + offsets[7]) / 45)
+        valley = abs(noise((x + offsets[8]) / 140, (z + offsets[9]) / 140))
         result = continentalness, erosion, ridge_noise, detail, valley
         if len(self._terrain_cache) >= 65536:
             self._evict_some(self._terrain_cache, 65536)
@@ -247,9 +247,9 @@ class worldGenerator:
         land = self._smoothstep(-0.18, 0.28, continentalness)
         ridge = max(0.0, 1.0 - abs(ridge_noise) * 1.8)
         erosion_factor = self._clamp(0.65 - erosion, 0.0, 1.25)
-        height = self.SEA_LEVEL + continentalness * 52 + detail * 9
-        height += land * max(0.0, ridge - 0.48) / 0.52 * erosion_factor * 125
-        height -= land * max(0.0, 0.16 - valley) / 0.16 * 24
+        height = self.SEA_LEVEL + continentalness * 18 + detail * 5
+        height += land * max(0.0, ridge - 0.48) / 0.52 * erosion_factor * 55
+        height -= land * max(0.0, 0.16 - valley) / 0.16 * 10
         if continentalness < -0.16:
             height = self.SEA_LEVEL - 5 + (continentalness + 0.16) * 72 + detail * 5
         height = round(self._clamp(height, self.MIN_Y + 5, self.MAX_Y - 16))
@@ -271,9 +271,9 @@ class worldGenerator:
             climate = self.perlinBiomes.noise2d
             temperature = climate((x + offsets[10]) / 260, (z + offsets[11]) / 260)
             humidity = climate((x + offsets[12]) / 220, (z + offsets[13]) / 220)
-            if height >= 135:
+            if height >= 115:
                 biome = "big_mountains"
-            elif height >= 105:
+            elif height >= 90:
                 biome = "mountains"
             elif temperature > 0.24 and humidity < 0.08:
                 biome = "desert"

@@ -112,7 +112,7 @@ void main() {
         discard;
     }
 
-    const int STEPS = 20;
+    const int STEPS = 12;
     float stepLength = (farDistance - nearDistance) / float(STEPS);
     float jitter = hash31(vec3(gl_FragCoord.xy, gameTime * 0.01));
     float distanceAlongRay = nearDistance + stepLength * jitter;
@@ -123,9 +123,13 @@ void main() {
         vec3 position = cameraPosition + rayDirection * distanceAlongRay;
         float density = cloudDensity(position);
         if (density > 0.005) {
-            // One short probe toward the sun gives self-shadowing and bright
-            // silver edges without doubling the full ray-march cost.
-            float towardSun = cloudDensity(position + sunDirection * 7.0);
+            // Alternate sun probes every other step to halve the cost while
+            // keeping self-shadowing and silver lining visible.
+            float towardSun = density;
+            if (stepIndex == 0 || stepIndex == 2 || stepIndex == 5
+                    || stepIndex == 8 || stepIndex == 11) {
+                towardSun = cloudDensity(position + sunDirection * 7.0);
+            }
             float lightTransmission = exp(-towardSun * 2.8);
             float forwardScatter = pow(max(dot(rayDirection, sunDirection), 0.0), 10.0);
             float silverLining = forwardScatter * lightTransmission * 0.85;

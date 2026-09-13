@@ -43,6 +43,7 @@ class Scene:
         self.entity = []
         self.mod_entity_types = {}
         self.mod_alpha_textures = set()
+        self.spawn_egg_items = {}
         self.mod_loader = None
         self.show_hitboxes = False
         self._entity_occlusion = {}
@@ -63,6 +64,7 @@ class Scene:
         self.entity.clear()
         self._entity_occlusion.clear()
         self._occlusion_cursor = 0
+        self.spawn_egg_items = {}
         self.allowEvents = {
             "movePlayer": True,
             "grabMouse": True,

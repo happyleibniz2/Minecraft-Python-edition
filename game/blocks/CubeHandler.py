@@ -41,9 +41,9 @@ class CubeHandler:
         # rebuild_dirty_chunks / chunks_within_distance / render_shadow.
         self._chunks_by_column = {}
         self.RENDER_CHUNK_SIZE = (16, 8, 16)
-        self.max_rebuilds_per_frame = 1
-        self.rebuild_cube_budget = 256
-        self.rebuild_time_budget = 0.004
+        self.max_rebuilds_per_frame = 3
+        self.rebuild_cube_budget = 512
+        self.rebuild_time_budget = 0.008
 
         # Conservative AABB frustum culling.
         self.frustum = Frustum()

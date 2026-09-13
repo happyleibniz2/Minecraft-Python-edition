@@ -29,6 +29,8 @@ class EventBus:
     def __init__(self, loader=None):
         self.listeners = defaultdict(list)
         self.listener_owners = defaultdict(dict)
+        self.listener_errors = defaultdict(int)
+        self.MAX_LISTENER_ERRORS = 3
         self.loader = loader
 
     def subscribe(self, event, callback):
@@ -68,6 +70,17 @@ class EventBus:
                     results.append(callback(**payload))
                 except Exception:
                     logging.exception("Mod event '%s' failed in %r", event, callback)
+                    key = (event, callback)
+                    self.listener_errors[key] += 1
+                    if self.listener_errors[key] >= self.MAX_LISTENER_ERRORS:
+                        self.listeners[event] = [
+                            item for item in self.listeners.get(event, ()) if item is not callback
+                        ]
+                        self.listener_owners[event].pop(callback, None)
+                        logging.warning(
+                            "Unsubscribed %r from event '%s' after %d failures",
+                            callback, event, self.MAX_LISTENER_ERRORS,
+                        )
                 finally:
                     if self.loader is not None:
                         self.loader.current_mod = previous_owner
@@ -93,7 +106,7 @@ class ForgeAPI:
 
     def register_entity(self, entity_id, factory):
         entity_id = self._valid_id(entity_id)
-        if entity_id in {"cow", "sheep", "zombie"}:
+        if entity_id in self.scene.entity_types():
             raise ValueError(f"Registry id already exists: {entity_id}")
         self.loader._record_mapping_change(self.scene.mod_entity_types, entity_id)
         self.scene.mod_entity_types[entity_id] = factory
@@ -158,6 +171,91 @@ class ForgeAPI:
             if name not in self.scene.cubes.alpha_textures:
                 self.scene.cubes.alpha_textures = tuple(self.scene.cubes.alpha_textures) + (name,)
         self.events.post("block_registered", name=name, block_type=block_type)
+
+    def register_spawn_egg(self, entity_id, primary, secondary):
+        entity_id = self._valid_id(entity_id)
+        if entity_id not in self.scene.mod_entity_types:
+            raise ValueError(f"Entity {entity_id!r} is not registered")
+
+        name = f"{entity_id}_spawn_egg"
+        self.loader._record_mapping_change(self.scene.texture, name)
+        self.loader._record_mapping_change(self.scene.inventory_textures, name)
+        self.scene.spawn_egg_items = getattr(self.scene, "spawn_egg_items", {})
+        self.loader._record_undo(lambda name=name: self.scene.spawn_egg_items.pop(name, None))
+
+        base_path = os.path.join("textures", "items", "spawn_egg.png")
+        overlay_path = os.path.join("textures", "items", "spawn_egg_overlay.png")
+        if not os.path.isfile(base_path):
+            raise FileNotFoundError(f"Missing spawn egg base texture: {base_path}")
+
+        def unpack(color):
+            return ((color >> 16) & 0xFF, (color >> 8) & 0xFF, color & 0xFF)
+
+        def load_rgba(path):
+            image = pyglet.image.load(path)
+            width, height = image.width, image.height
+            raw = image.get_image_data().get_data("RGBA", width * 4)
+            rows = [bytearray(raw[y * width * 4:(y + 1) * width * 4]) for y in range(height)]
+            rows.reverse()
+            return width, height, rows
+
+        def tint_over(base_rows, overlay_rows, width, height, base_color, overlay_color):
+            out = bytearray(width * height * 4)
+            for y in range(height):
+                base_row = base_rows[y]
+                overlay_row = overlay_rows[y] if overlay_rows else None
+                for x in range(width):
+                    offset = x * 4
+                    br, bg, bb, ba = base_row[offset:offset + 4]
+                    r = br * base_color[0] // 255
+                    g = bg * base_color[1] // 255
+                    b = bb * base_color[2] // 255
+                    a = ba
+                    if overlay_row is not None:
+                        orr, og, ob, oa = overlay_row[offset:offset + 4]
+                        if oa:
+                            sr = orr * overlay_color[0] // 255
+                            sg = og * overlay_color[1] // 255
+                            sb = ob * overlay_color[2] // 255
+                            alpha = oa / 255.0
+                            r = int(sr * alpha + r * (1 - alpha))
+                            g = int(sg * alpha + g * (1 - alpha))
+                            b = int(sb * alpha + b * (1 - alpha))
+                            a = max(a, oa)
+                    target = (y * width + x) * 4
+                    out[target:target + 4] = bytes((r, g, b, a))
+            return bytes(out)
+
+        width, height, base_rows = load_rgba(base_path)
+        overlay_rows = None
+        if os.path.isfile(overlay_path):
+            overlay_width, overlay_height, overlay_rows = load_rgba(overlay_path)
+            if (overlay_width, overlay_height) != (width, height):
+                overlay_rows = None
+
+        pixels = tint_over(
+            base_rows,
+            overlay_rows,
+            width,
+            height,
+            unpack(primary),
+            unpack(secondary),
+        )
+        image = pyglet.image.ImageData(width, height, "RGBA", pixels, pitch=-width * 4)
+        texture = image.get_texture()
+        glBindTexture(GL_TEXTURE_2D, texture.id)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
+
+        self.scene.texture[name] = pyglet.graphics.TextureGroup(texture)
+
+        icon = pyglet.image.ImageData(width, height, "RGBA", pixels, pitch=-width * 4)
+        icon.width = 22
+        icon.height = 22
+        self.scene.inventory_textures[name] = icon
+
+        self.scene.spawn_egg_items[name] = entity_id
+        self.events.post("spawn_egg_registered", entity_id=entity_id, item_name=name)
 
     def _restore_alpha(self, name, already_alpha):
         if already_alpha:

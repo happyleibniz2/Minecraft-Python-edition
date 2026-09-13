@@ -74,7 +74,10 @@ class ModArchiveTests(unittest.TestCase):
                     "    api.subscribe('probe', lambda scene: scene.trace.append('listener'))\n",
                 )
 
-            scene = SimpleNamespace(trace=[], mod_entity_types={})
+            scene = SimpleNamespace(
+                trace=[], mod_entity_types={},
+                entity_types=lambda: {},
+            )
             loader = ModLoader(gl=scene, mods_path=mods_path)
             loaded = loader.load_all()
             module = loaded["unloadable"]

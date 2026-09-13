@@ -85,10 +85,7 @@ float noise21(vec2 p) {
 }
 
 float cloudNoise(vec2 p) {
-    float value = noise21(p) * 0.67;
-    p = p * 2.03 + vec2(19.1, 7.7);
-    value += noise21(p) * 0.33;
-    return value;
+    return noise21(p);
 }
 
 float realtimeShadow() {
