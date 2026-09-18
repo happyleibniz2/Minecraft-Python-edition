@@ -27,6 +27,13 @@ uniform int shadowSoftness;
 uniform int volumetricLightEnabled;
 uniform float volumetricStrength;
 uniform vec3 cameraPosition;
+uniform vec2 cloudOffset;
+uniform float cloudCoverage;
+uniform mat4 shadowMatrix;
+uniform float viewWidth;
+uniform float viewHeight;
+uniform mat4 gbufferProjectionInverse;
+uniform mat4 inverseViewMatrix;
 
 // Outputs (ping-pong buffers)
 layout(location = 0) out vec4 outColor;
@@ -102,29 +109,41 @@ float calculateSoftShadow(vec3 shadowCoord) {
 }
 
 // Volumetric lighting (godrays) - raymarching through shadow map
-vec3 calculateVolumetricLight(vec3 viewRay, float depth, vec3 shadowCoord) {
+vec3 calculateVolumetricLight(vec3 worldPos, float depth, mat4 shadowMatrixInverse) {
     if (volumetricLightEnabled == 0) {
         return vec3(0.0);
     }
     
-    // Raymarch from camera towards light source
-    int steps = 8;  // Performance-friendly step count
-    float stepSize = 1.0 / float(steps);
+    // Raymarch FROM the fragment position TOWARDS the sun
+    int steps = 16;  // Increased for better quality
+    float stepSize = 4.0 / float(steps);  // 4 unit steps in world space
+    vec3 lightDir = normalize(sunDirection);
     vec3 volumetricAccumulator = vec3(0.0);
     
+    // Add dithering to reduce banding artifacts
+    float dither = hash(gl_FragCoord.xy + gameTime * 10.0) * 2.0 - 1.0;
+    
     for (int i = 0; i < steps; i++) {
-        float t = float(i) * stepSize;
-        vec3 samplePos = shadowCoord.xyz * t;
-        samplePos /= samplePos.w;
+        float t = float(i) * stepSize + dither * stepSize * 0.5;
+        vec3 samplePos = worldPos + lightDir * t;
         
-        if (samplePos.x >= 0.0 && samplePos.x <= 1.0 &&
-            samplePos.y >= 0.0 && samplePos.y <= 1.0) {
-            float shadowSample = texture(shadowMap, samplePos.xy).r;
-            float visibility = smoothstep(samplePos.z - 0.002, samplePos.z + 0.002, shadowSample);
+        // Transform sample position to light space for shadow lookup
+        vec4 lightSpacePos = shadowMatrixInverse * vec4(samplePos, 1.0);
+        vec3 projected = lightSpacePos.xyz / lightSpacePos.w;
+        
+        // Check bounds in light space
+        if (projected.x >= 0.0 && projected.x <= 1.0 &&
+            projected.y >= 0.0 && projected.y <= 1.0 &&
+            projected.z >= 0.0 && projected.z <= 1.0) {
             
-            // Add godray contribution with density falloff
-            float density = exp(-t * 2.5);
-            volumetricAccumulator += sunColor * visibility * density * stepSize;
+            float shadowSample = texture(shadowMap, projected.xy).r;
+            float visibility = smoothstep(projected.z - 0.002, projected.z + 0.002, shadowSample);
+            
+            // Density based on distance from camera (exponential falloff)
+            float distToCamera = length(samplePos - cameraPosition);
+            float density = exp(-distToCamera * 0.08) * (1.0 - exp(-distToCamera * 0.5));
+            
+            volumetricAccumulator += sunColor * visibility * density * stepSize * 0.15;
         }
     }
     
@@ -138,10 +157,13 @@ void main() {
     vec4 normalData = texture(colortex2, inTexCoord);
     vec4 depthData = texture(colortex3, inTexCoord);
     
-    // Reconstruct world position from depth
-    float depth = depthData.r * 256.0;  // Unnormalize depth
-    vec3 viewRay = normalize(cameraPosition);
-    vec3 worldPos = cameraPosition + viewRay * depth;
+    // Reconstruct view position from linear depth
+    float linearDepth = depthData.r;  // Already normalized [0,1]
+    vec2 ndc = gl_FragCoord.xy / vec2(viewWidth, viewHeight) * 2.0 - 1.0;
+    vec4 clipPos = vec4(ndc, linearDepth * 2.0 - 1.0, 1.0);
+    vec4 viewPos = gbufferProjectionInverse * clipPos;
+    viewPos /= viewPos.w;
+    vec3 worldPos = (inverseViewMatrix * vec4(viewPos.xyz, 1.0)).xyz;
     
     // Decode normal from [0,1] back to [-1,1]
     vec3 normal = normalData.rgb * 2.0 - 1.0;
@@ -159,8 +181,8 @@ void main() {
     // Torch light flicker effect (from original shader)
     float flicker = 0.975 + 0.025 * sin(gameTime * 8.0 + worldPos.x * 1.7 + worldPos.z * 2.3);
     
-    // Calculate shadow coordinate for this fragment
-    vec4 shadowCoord = gl_FragCoord;  // Simplified - would need proper reconstruction
+    // Reconstruct shadow coordinate from world position using shadowMatrix uniform
+    vec4 shadowCoord = shadowMatrix * vec4(worldPos, 1.0);
     
     // Calculate soft shadows with PCF
     float shadow = calculateSoftShadow(shadowCoord);
@@ -191,7 +213,8 @@ void main() {
     litColor += specularHighlight;
     
     // Calculate volumetric lighting (godrays)
-    vec3 volumetric = calculateVolumetricLight(viewRay, depth, shadowCoord);
+    mat4 shadowMatrixInv = inverse(shadowMatrix);
+    vec3 volumetric = calculateVolumetricLight(worldPos, linearDepth, shadowMatrixInv);
     litColor += volumetric;
     
     // Output results
