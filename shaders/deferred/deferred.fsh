@@ -122,7 +122,12 @@ vec3 calculateVolumetricLight(vec3 worldPos, float depth) {
     
     // Add dithering to reduce banding artifacts (blue noise simulation)
     float framePhase = fract(gameTime * 60.0);
-    float dither = hash(gl_FragCoord.xy * 0.15 + framePhase * 17.3) * 2.0 - 1.0;
+    // CRITICAL FIX: Use pixel-frequency hash, not scaled-down frequency
+    // gl_FragCoord.xy * 13.0 gives proper pixel-level variation
+    float dither = hash(gl_FragCoord.xy * 13.0 + framePhase * 17.3) * 2.0 - 1.0;
+    
+    // Accumulate step distance for correct density calculation
+    float accumulatedDist = 0.0;
     
     for (int i = 0; i < steps; i++) {
         float t = float(i) * stepSize + dither * stepSize * 0.5;
@@ -141,10 +146,10 @@ vec3 calculateVolumetricLight(vec3 worldPos, float depth) {
             float shadowSample = texture(shadowMap, projected.xy).r;
             float visibility = smoothstep(projected.z - 0.003, projected.z + 0.003, shadowSample);
             
-            // Density based on distance from camera (exponential falloff)
-            // Only accumulate scattered light, not sky-light-mixed color
-            float distToCamera = length(samplePos - cameraPosition);
-            float density = exp(-distToCamera * 0.06) * (1.0 - exp(-distToCamera * 0.35));
+            // CRITICAL FIX: Use accumulated raymarch distance, NOT Euclidean distance
+            // This correctly accounts for the path length through the medium
+            accumulatedDist = t;  // Distance along the ray from fragment
+            float density = exp(-accumulatedDist * 0.06) * (1.0 - exp(-accumulatedDist * 0.35));
             
             // Accumulate ONLY direct sun scattering (avoid double-counting skylight)
             volumetricAccumulator += sunColor * visibility * density * stepSize * 0.12;
@@ -162,9 +167,9 @@ void main() {
     vec4 depthData = texture(colortex3, inTexCoord);
     
     // Reconstruct view position from linear depth
-    // CORRECT: depthData.r stores normalized linear depth [0,1], need to multiply by far plane
+    // CORRECT: depthData.r stores normalized linear depth [0,1], multiply by farPlane
     float normalizedDepth = depthData.r;
-    float linearDepth = normalizedDepth * 256.0;  // Unpack: was stored as depth/256.0
+    float linearDepth = normalizedDepth * farPlane;  // Unpack: stored as depth/farPlane
     
     // CORRECT: Normalize gl_FragCoord to NDC [-1, 1]
     vec2 ndc = (gl_FragCoord.xy / vec2(viewWidth, viewHeight)) * 2.0 - 1.0;

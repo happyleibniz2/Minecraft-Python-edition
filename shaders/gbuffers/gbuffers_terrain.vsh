@@ -20,6 +20,7 @@ uniform float gameTime;
 uniform vec2 cloudOffset;
 uniform float leavesSway;
 uniform int worldCurvatureEnabled;
+uniform float farPlane;              // For depth normalization in fragment shader
 
 // Outputs to fragment shader (GBuffer data)
 out vec3 outWorldPos;
@@ -29,6 +30,7 @@ out vec2 outTexCoord;
 out float outTorchLight;
 out vec4 outShadowCoord;
 out float outFogDistance;
+out vec4 outViewPos;  // NEW: Pass view position for correct depth reconstruction
 
 void main() {
     vec3 animatedPosition = inPosition;
@@ -71,6 +73,7 @@ void main() {
     // View-space position for fog calculation
     vec4 viewPos = viewMatrix * worldPos;
     outFogDistance = length(viewPos.xyz);
+    outViewPos = viewPos;  // Pass view position to fragment shader
     
     // Final clip-space position
     gl_Position = projectionMatrix * viewPos;

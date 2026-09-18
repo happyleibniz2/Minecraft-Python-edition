@@ -12,6 +12,7 @@ in vec2 inTexCoord;
 in float inTorchLight;
 in vec4 inShadowCoord;
 in float inFogDistance;
+in vec4 inViewPos;  // NEW: View position from vertex shader for correct depth
 
 // Uniforms
 uniform sampler2D texture0;          // Main block texture
@@ -19,6 +20,8 @@ uniform float gameTime;
 uniform int parallaxMappingEnabled;
 uniform float parallaxDepth;
 uniform int renderQuality;
+uniform float farPlane;              // For depth normalization
+uniform mat4 viewMatrix;             // For view-space depth calculation
 
 // GBuffer Outputs (matching OptiFine colortex convention)
 layout(location = 0) out vec4 colortex0;  // Albedo/Color
@@ -76,8 +79,9 @@ void main() {
     
     // CORRECT: Write linear view-space depth normalized by far plane
     // This ensures deferred pass can reconstruct world position accurately
-    float viewSpaceZ = length(inWorldPos - cameraPosition);
-    colortex3 = vec4(viewSpaceZ / 256.0, 0.0, 0.0, 1.0);  // Linear depth normalized
+    // CRITICAL FIX: Use the view position passed from vertex shader
+    float viewSpaceZ = -inViewPos.z;  // Linear view-space depth (positive)
+    colortex3 = vec4(viewSpaceZ / farPlane, 0.0, 0.0, 1.0);  // Normalized by farPlane
     
     colortex4 = vec4(0.0);                           // Reserved for shadow sampling
     colortex5 = vec4(0.0);                           // Will be filled by deferred stage

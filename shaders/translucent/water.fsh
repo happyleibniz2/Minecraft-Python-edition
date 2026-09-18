@@ -27,6 +27,8 @@ uniform float foamThreshold;
 uniform float gameTime;
 uniform mat4 gbufferProjection;
 uniform mat4 gbufferProjectionInverse;
+uniform mat4 viewMatrix;       // NEW: For SSR depth calculation
+uniform mat4 inverseViewMatrix;
 uniform float viewWidth;
 uniform float viewHeight;
 uniform float farPlane;
@@ -89,9 +91,10 @@ vec3 calculateSSR(vec3 worldPos, vec3 normal, vec3 viewDir, out float hitDepth) 
         float sceneLinearDepth = sceneDepthNorm * farPlane;
         
         // CRITICAL FIX: Calculate linear depth of our ray position in VIEW SPACE
-        // Use -viewSpaceZ, NOT Euclidean distance, for correct depth comparison
-        vec4 viewSamplePos4 = gbufferProjection * vec4(samplePos - cameraPosition, 1.0);
-        float rayLinearDepth = -viewSamplePos4.z / viewSamplePos4.w;  // Extract view-space Z
+        // Use viewMatrix to transform to view space, then take -Z
+        // NOT projection matrix which gives clip space, not view space
+        vec4 viewSamplePos4 = viewMatrix * vec4(samplePos, 1.0);
+        float rayLinearDepth = -viewSamplePos4.z;  // View-space Z is already linear
         
         // Check for intersection with proper depth comparison
         float depthDiff = abs(sceneLinearDepth - rayLinearDepth);
