@@ -43,33 +43,33 @@ layout(location = 0) out vec4 outColor;
 // Time-based color grading LUT approximation (BSL style)
 vec3 applyTimeBasedColorGrading(vec3 color, float time) {
     float normalizedTime = fract(time / 24.0);
-    
+
     // Dawn (5-7 AM): cool pastels
     vec3 dawnTint = vec3(1.0, 0.85, 0.9);
-    float dawnWeight = smoothstep(5.0/24.0, 6.0/24.0, normalizedTime) * 
+    float dawnWeight = smoothstep(5.0/24.0, 6.0/24.0, normalizedTime) *
                        (1.0 - smoothstep(7.0/24.0, 8.0/24.0, normalizedTime));
-    
+
     // Noon (10 AM - 2 PM): warm saturation boost
     vec3 noonTint = vec3(1.05, 1.02, 0.95);
-    float noonWeight = smoothstep(10.0/24.0, 11.0/24.0, normalizedTime) * 
+    float noonWeight = smoothstep(10.0/24.0, 11.0/24.0, normalizedTime) *
                        (1.0 - smoothstep(14.0/24.0, 15.0/24.0, normalizedTime));
-    
+
     // Dusk/Sunset (6-8 PM): orange tones
     vec3 duskTint = vec3(1.0, 0.75, 0.5);
-    float duskWeight = smoothstep(18.0/24.0, 19.0/24.0, normalizedTime) * 
+    float duskWeight = smoothstep(18.0/24.0, 19.0/24.0, normalizedTime) *
                        (1.0 - smoothstep(20.0/24.0, 21.0/24.0, normalizedTime));
-    
+
     // Night: cool blue tint
     vec3 nightTint = vec3(0.7, 0.8, 1.0);
-    float nightWeight = smoothstep(21.0/24.0, 22.0/24.0, normalizedTime) + 
+    float nightWeight = smoothstep(21.0/24.0, 22.0/24.0, normalizedTime) +
                         (1.0 - smoothstep(4.0/24.0, 5.0/24.0, normalizedTime));
-    
+
     vec3 gradedColor = color;
     gradedColor = mix(gradedColor, gradedColor * dawnTint, dawnWeight * 0.3);
     gradedColor = mix(gradedColor, gradedColor * noonTint, noonWeight * 0.2);
     gradedColor = mix(gradedColor, gradedColor * duskTint, duskWeight * 0.4);
     gradedColor = mix(gradedColor, gradedColor * nightTint, nightWeight * 0.25);
-    
+
     return gradedColor;
 }
 
@@ -88,11 +88,11 @@ vec3 gaussianBlur(sampler2D tex, vec2 uv, vec2 texelSize, float radius) {
     if (radius < 0.5) {
         return texture(tex, uv).rgb;
     }
-    
+
     vec3 result = vec3(0.0);
     float totalWeight = 0.0;
     int kernelSize = 5;
-    
+
     for (float x = -2.0; x <= 2.0; x++) {
         for (float y = -2.0; y <= 2.0; y++) {
             vec2 offset = vec2(x, y) * texelSize * radius;
@@ -101,7 +101,7 @@ vec3 gaussianBlur(sampler2D tex, vec2 uv, vec2 texelSize, float radius) {
             totalWeight += weight;
         }
     }
-    
+
     return result / totalWeight;
 }
 
@@ -110,45 +110,49 @@ vec3 applyProperBloom(vec2 uv, vec2 texelSize) {
     if (bloomEnabled == 0) {
         return vec3(0.0);
     }
-    
+
     // STEP 1: Extract bright highlights with luminance threshold
     vec3 baseColor = texture(colortex0, uv).rgb;
     float luminance = dot(baseColor, vec3(0.2126, 0.7152, 0.0722));
     float threshold = 0.85;  // Only pixels brighter than this contribute to bloom
+    
+    // Soft threshold extraction (avoids hard cutoff artifacts)
     float brightness = max(0.0, luminance - threshold);
     vec3 extractedHighlights = baseColor * (brightness / max(luminance, 0.001));
+
+    // STEP 2: Build Gaussian pyramid - each level is blurred version of previous
+    // Level 0: Full resolution highlights (sharp core)
+    vec3 bloomLevel0 = extractedHighlights;
+
+    // Level 1: Blur with radius 1.5 (simulates 1/2 res downsample)
+    vec3 bloomLevel1 = gaussianBlur(colortex0, uv, texelSize * 1.5, 1.2);
     
-    // STEP 2: Build Gaussian pyramid by downsampling and blurring
-    // Level 0: Full resolution highlights
-    vec3 bloom0 = extractedHighlights;
+    // Level 2: Blur with radius 2.5 (simulates 1/4 res downsample)  
+    vec3 bloomLevel2 = gaussianBlur(colortex0, uv, texelSize * 3.0, 2.0);
     
-    // Level 1: Half resolution (downsample with blur)
-    vec3 bloom1 = gaussianBlur(colortex0, uv, texelSize * 2.0, 1.5);
-    bloom1 *= dot(bloom1, vec3(0.2126, 0.7152, 0.0722)) > threshold ? 1.0 : 0.0;
+    // Level 3: Blur with radius 4.0 (simulates 1/8 res downsample - widest glow)
+    vec3 bloomLevel3 = gaussianBlur(colortex0, uv, texelSize * 6.0, 3.5);
+
+    // STEP 3: CRITICAL - Upsample and ACCUMULATE in pyramid fashion
+    // Each level must add the upsampled result from the level below it
+    // This creates continuous, layered glow instead of discrete rings
     
-    // Level 2: Quarter resolution (more downsample, wider blur)
-    vec3 bloom2 = gaussianBlur(colortex0, uv, texelSize * 4.0, 2.5);
-    bloom2 *= dot(bloom2, vec3(0.2126, 0.7152, 0.0722)) > threshold * 0.8 ? 1.0 : 0.0;
+    // Start from smallest (most blurred) level
+    vec3 accumulatedGlow = bloomLevel3;
     
-    // Level 3: Eighth resolution (widest blur for ambient glow)
-    vec3 bloom3 = gaussianBlur(colortex0, uv, texelSize * 8.0, 4.0);
-    bloom3 *= dot(bloom3, vec3(0.2126, 0.7152, 0.0722)) > threshold * 0.6 ? 1.0 : 0.0;
+    // Upsample level 3 -> add to level 2
+    vec3 upsampledL3 = gaussianBlur(colortex0, uv, texelSize * 3.0, 2.0);
+    accumulatedGlow = bloomLevel2 + upsampledL3;
     
-    // STEP 3: Upsample and ACCUMULATE (not just weighted sum)
-    // This creates the continuous, layered glow characteristic of BSL
-    vec3 upsampled3 = bloom3;
-    vec3 upsampled2 = gaussianBlur(colortex9, uv, texelSize * 4.0, 2.0) + upsampled3;
-    vec3 upsampled1 = gaussianBlur(colortex8, uv, texelSize * 2.0, 1.5) + upsampled2;
-    vec3 upsampled0 = gaussianBlur(colortex7, uv, texelSize, 1.0) + upsampled1;
+    // Upsample combined (L2+L3) -> add to level 1
+    vec3 upsampledL2 = gaussianBlur(colortex0, uv, texelSize * 1.5, 1.2);
+    accumulatedGlow = bloomLevel1 + upsampledL2;
     
-    // STEP 4: Final accumulation with weights
-    vec3 bloomAccum = bloom0 * 0.35;       // Sharp highlights core
-    bloomAccum += upsampled0 * 0.30;       // Inner glow layer
-    bloomAccum += upsampled1 * 0.20;       // Middle glow layer  
-    bloomAccum += upsampled2 * 0.10;       // Outer glow layer
-    bloomAccum += upsampled3 * 0.05;       // Wide ambient halo
-    
-    return bloomAccum * bloomStrength;
+    // Upsample combined (L1+L2+L3) -> add to level 0
+    accumulatedGlow = bloomLevel0 + accumulatedGlow;
+
+    // STEP 4: Apply bloom strength and return
+    return accumulatedGlow * bloomStrength;
 }
 
 // Depth of field (simplified bokeh approximation)
@@ -156,87 +160,71 @@ vec3 applyDepthOfField(vec3 color, float depthNorm) {
     if (dofEnabled == 0) {
         return color;
     }
-    
+
     float linearDepth = depthNorm * farPlane;
     float focusDistance = dofFocus * farPlane;
     float aperture = dofAperture;
-    
+
     float blurAmount = abs(linearDepth - focusDistance) * aperture * 0.0001;
     blurAmount = clamp(blurAmount, 0.0, 1.0);
-    
+
     if (blurAmount < 0.01) {
         return color;
     }
-    
+
     vec2 texelSize = 1.0 / vec2(viewWidth, viewHeight);
     vec3 blurred = gaussianBlur(colortex0, inTexCoord, texelSize, blurAmount * 3.0);
-    
+
     return mix(color, blurred, blurAmount);
 }
 
 void main() {
     // Sample lit color from deferred pass
     vec3 color = texture(colortex0, inTexCoord).rgb;
-    
+
     // Add volumetric lighting (godrays)
     if (volumetricLightEnabled == 1) {
         vec3 volumetric = texture(colortex5, inTexCoord).rgb;
         color += volumetric * volumetricStrength;
     }
-    
+
     // Apply PROPER BLOOM (multi-scale pyramid)
     vec2 texelSize = 1.0 / vec2(viewWidth, viewHeight);
     vec3 bloomResult = applyProperBloom(inTexCoord, texelSize);
     color += bloomResult;
-    
+
     // Apply clouds overlay
     vec4 clouds = texture(colortex13, inTexCoord);
     if (clouds.a > 0.01) {
         color = mix(color, clouds.rgb, clouds.a * 0.6);
     }
-    
+
     // Apply weather effects
     if (rainStrength > 0.01) {
         color *= (1.0 - rainStrength * 0.3);
-        float grayScale = dot(color, vec3(0.299, 0.587, 0.114));
-        color = mix(color, vec3(grayScale), rainStrength * 0.4);
     }
-    
-    // Apply biome-specific fog/atmosphere
-    vec3 fogColor = vec3(0.5, 0.7, 1.0);  // Default temperate
-    
-    if (biomeType == 1) {  // Desert
-        fogColor = vec3(1.0, 0.85, 0.6);
-    } else if (biomeType == 2) {  // Snow/Taiga
-        fogColor = vec3(0.8, 0.85, 0.95);
-    } else if (biomeType == 3) {  // Swamp
-        fogColor = vec3(0.6, 0.7, 0.5);
-    }
-    
-    // Apply exposure and brightness
-    color = color * exposure + brightness;
-    
+
     // Apply time-based color grading (BSL signature feature)
     color = applyTimeBasedColorGrading(color, gameTime);
-    
-    // Apply saturation and vibrance
+
+    // Adjust saturation and vibrance
     color = adjustSaturationVibrance(color, saturation, vibrance);
-    
+
     // Apply depth of field
     float depthNorm = texture(colortex3, inTexCoord).r;
     color = applyDepthOfField(color, depthNorm);
-    
+
     // Tone mapping (Reinhard operator for cinematic look)
     color = color / (color + vec3(1.0));
-    
+
     // Gamma correction
     color = pow(color, vec3(1.0 / 2.2));
-    
+
     // Final contrast boost (BSL-style)
     color = (color - 0.5) * 1.05 + 0.5;
-    
+
     // Clamp to valid range
     color = clamp(color, 0.0, 1.0);
-    
+
     outColor = vec4(color, 1.0);
 }
