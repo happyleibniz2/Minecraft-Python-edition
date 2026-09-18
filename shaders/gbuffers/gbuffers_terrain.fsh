@@ -73,7 +73,12 @@ void main() {
     colortex0 = finalColor;                          // Albedo
     colortex1 = vec4(specular, gloss, 0.0, 1.0);     // Material properties
     colortex2 = vec4(encodedNormal, 1.0);            // Normals
-    colortex3 = vec4(inFogDistance / 256.0, 0.0, 0.0, 1.0);  // Depth (normalized)
+    
+    // CORRECT: Write linear view-space depth normalized by far plane
+    // This ensures deferred pass can reconstruct world position accurately
+    float viewSpaceZ = length(inWorldPos - cameraPosition);
+    colortex3 = vec4(viewSpaceZ / 256.0, 0.0, 0.0, 1.0);  // Linear depth normalized
+    
     colortex4 = vec4(0.0);                           // Reserved for shadow sampling
     colortex5 = vec4(0.0);                           // Will be filled by deferred stage
     colortex6 = vec4(0.0);                           // Will be filled by SSR pass

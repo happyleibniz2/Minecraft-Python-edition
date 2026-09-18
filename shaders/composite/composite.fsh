@@ -105,37 +105,48 @@ vec3 gaussianBlur(sampler2D tex, vec2 uv, vec2 texelSize, float radius) {
     return result / totalWeight;
 }
 
-// PHYSICALLY CORRECT BLOOM: Multi-scale pyramid upsampling
+// PHYSICALLY CORRECT BLOOM: Multi-scale pyramid with proper threshold extraction
 vec3 applyProperBloom(vec2 uv, vec2 texelSize) {
     if (bloomEnabled == 0) {
         return vec3(0.0);
     }
     
-    // Sample from multiple mip levels of the bloom pyramid
-    // This creates the soft, layered glow that BSL is known for
+    // STEP 1: Extract bright highlights with luminance threshold
+    vec3 baseColor = texture(colortex0, uv).rgb;
+    float luminance = dot(baseColor, vec3(0.2126, 0.7152, 0.0722));
+    float threshold = 0.85;  // Only pixels brighter than this contribute to bloom
+    float brightness = max(0.0, luminance - threshold);
+    vec3 extractedHighlights = baseColor * (brightness / max(luminance, 0.001));
     
-    // Level 0: Original high-frequency highlights (smallest blur)
-    vec3 bloom0 = texture(colortex7, uv).rgb;
+    // STEP 2: Build Gaussian pyramid by downsampling and blurring
+    // Level 0: Full resolution highlights
+    vec3 bloom0 = extractedHighlights;
     
-    // Level 1: Half resolution (already blurred in previous pass)
-    vec3 bloom1 = texture(colortex8, uv).rgb;
+    // Level 1: Half resolution (downsample with blur)
+    vec3 bloom1 = gaussianBlur(colortex0, uv, texelSize * 2.0, 1.5);
+    bloom1 *= dot(bloom1, vec3(0.2126, 0.7152, 0.0722)) > threshold ? 1.0 : 0.0;
     
-    // Level 2: Quarter resolution (more blurred)
-    vec3 bloom2 = texture(colortex9, uv).rgb;
+    // Level 2: Quarter resolution (more downsample, wider blur)
+    vec3 bloom2 = gaussianBlur(colortex0, uv, texelSize * 4.0, 2.5);
+    bloom2 *= dot(bloom2, vec3(0.2126, 0.7152, 0.0722)) > threshold * 0.8 ? 1.0 : 0.0;
     
-    // Level 3: Eighth resolution (widest glow)
-    vec3 bloom3 = texture(colortex10, uv).rgb;
+    // Level 3: Eighth resolution (widest blur for ambient glow)
+    vec3 bloom3 = gaussianBlur(colortex0, uv, texelSize * 8.0, 4.0);
+    bloom3 *= dot(bloom3, vec3(0.2126, 0.7152, 0.0722)) > threshold * 0.6 ? 1.0 : 0.0;
     
-    // Upsample and combine with weights (mimics Gaussian pyramid)
-    vec3 upsampled2 = gaussianBlur(colortex9, uv, texelSize * 2.0, 2.0);
-    vec3 upsampled1 = gaussianBlur(colortex8, uv, texelSize, 1.5);
-    vec3 upsampled0 = gaussianBlur(colortex7, uv, texelSize, 1.0);
+    // STEP 3: Upsample and ACCUMULATE (not just weighted sum)
+    // This creates the continuous, layered glow characteristic of BSL
+    vec3 upsampled3 = bloom3;
+    vec3 upsampled2 = gaussianBlur(colortex9, uv, texelSize * 4.0, 2.0) + upsampled3;
+    vec3 upsampled1 = gaussianBlur(colortex8, uv, texelSize * 2.0, 1.5) + upsampled2;
+    vec3 upsampled0 = gaussianBlur(colortex7, uv, texelSize, 1.0) + upsampled1;
     
-    // Combine all scales - this is the KEY to proper bloom
-    vec3 bloomAccum = bloom0 * 0.4;           // Sharp highlights
-    bloomAccum += upsampled0 * 0.3;           // Medium glow
-    bloomAccum += upsampled1 * 0.2;           // Soft glow
-    bloomAccum += bloom3 * 0.1;               // Wide ambient glow
+    // STEP 4: Final accumulation with weights
+    vec3 bloomAccum = bloom0 * 0.35;       // Sharp highlights core
+    bloomAccum += upsampled0 * 0.30;       // Inner glow layer
+    bloomAccum += upsampled1 * 0.20;       // Middle glow layer  
+    bloomAccum += upsampled2 * 0.10;       // Outer glow layer
+    bloomAccum += upsampled3 * 0.05;       // Wide ambient halo
     
     return bloomAccum * bloomStrength;
 }

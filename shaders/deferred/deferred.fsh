@@ -109,26 +109,28 @@ float calculateSoftShadow(vec3 shadowCoord) {
 }
 
 // Volumetric lighting (godrays) - raymarching through shadow map
-vec3 calculateVolumetricLight(vec3 worldPos, float depth, mat4 shadowMatrixInverse) {
+vec3 calculateVolumetricLight(vec3 worldPos, float depth) {
     if (volumetricLightEnabled == 0) {
         return vec3(0.0);
     }
     
     // Raymarch FROM the fragment position TOWARDS the sun
-    int steps = 16;  // Increased for better quality
-    float stepSize = 4.0 / float(steps);  // 4 unit steps in world space
+    int steps = 24;  // Increased for better quality
+    float stepSize = 3.5 / float(steps);  // 3.5 unit steps in world space
     vec3 lightDir = normalize(sunDirection);
     vec3 volumetricAccumulator = vec3(0.0);
     
-    // Add dithering to reduce banding artifacts
-    float dither = hash(gl_FragCoord.xy + gameTime * 10.0) * 2.0 - 1.0;
+    // Add dithering to reduce banding artifacts (blue noise simulation)
+    float framePhase = fract(gameTime * 60.0);
+    float dither = hash(gl_FragCoord.xy * 0.15 + framePhase * 17.3) * 2.0 - 1.0;
     
     for (int i = 0; i < steps; i++) {
         float t = float(i) * stepSize + dither * stepSize * 0.5;
         vec3 samplePos = worldPos + lightDir * t;
         
         // Transform sample position to light space for shadow lookup
-        vec4 lightSpacePos = shadowMatrixInverse * vec4(samplePos, 1.0);
+        // CORRECT: Use shadowMatrix (world → light space), NOT inverse
+        vec4 lightSpacePos = shadowMatrix * vec4(samplePos, 1.0);
         vec3 projected = lightSpacePos.xyz / lightSpacePos.w;
         
         // Check bounds in light space
@@ -137,13 +139,15 @@ vec3 calculateVolumetricLight(vec3 worldPos, float depth, mat4 shadowMatrixInver
             projected.z >= 0.0 && projected.z <= 1.0) {
             
             float shadowSample = texture(shadowMap, projected.xy).r;
-            float visibility = smoothstep(projected.z - 0.002, projected.z + 0.002, shadowSample);
+            float visibility = smoothstep(projected.z - 0.003, projected.z + 0.003, shadowSample);
             
             // Density based on distance from camera (exponential falloff)
+            // Only accumulate scattered light, not sky-light-mixed color
             float distToCamera = length(samplePos - cameraPosition);
-            float density = exp(-distToCamera * 0.08) * (1.0 - exp(-distToCamera * 0.5));
+            float density = exp(-distToCamera * 0.06) * (1.0 - exp(-distToCamera * 0.35));
             
-            volumetricAccumulator += sunColor * visibility * density * stepSize * 0.15;
+            // Accumulate ONLY direct sun scattering (avoid double-counting skylight)
+            volumetricAccumulator += sunColor * visibility * density * stepSize * 0.12;
         }
     }
     
@@ -158,8 +162,15 @@ void main() {
     vec4 depthData = texture(colortex3, inTexCoord);
     
     // Reconstruct view position from linear depth
-    float linearDepth = depthData.r;  // Already normalized [0,1]
-    vec2 ndc = gl_FragCoord.xy / vec2(viewWidth, viewHeight) * 2.0 - 1.0;
+    // CORRECT: depthData.r stores normalized linear depth [0,1], need to multiply by far plane
+    float normalizedDepth = depthData.r;
+    float linearDepth = normalizedDepth * 256.0;  // Unpack: was stored as depth/256.0
+    
+    // CORRECT: Normalize gl_FragCoord to NDC [-1, 1]
+    vec2 ndc = (gl_FragCoord.xy / vec2(viewWidth, viewHeight)) * 2.0 - 1.0;
+    
+    // Reconstruct clip space position with proper linear depth
+    // Linear depth is in view space, convert to clip space z
     vec4 clipPos = vec4(ndc, linearDepth * 2.0 - 1.0, 1.0);
     vec4 viewPos = gbufferProjectionInverse * clipPos;
     viewPos /= viewPos.w;
@@ -213,8 +224,7 @@ void main() {
     litColor += specularHighlight;
     
     // Calculate volumetric lighting (godrays)
-    mat4 shadowMatrixInv = inverse(shadowMatrix);
-    vec3 volumetric = calculateVolumetricLight(worldPos, linearDepth, shadowMatrixInv);
+    vec3 volumetric = calculateVolumetricLight(worldPos, linearDepth);
     litColor += volumetric;
     
     // Output results

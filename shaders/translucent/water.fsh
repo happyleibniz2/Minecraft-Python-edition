@@ -88,9 +88,10 @@ vec3 calculateSSR(vec3 worldPos, vec3 normal, vec3 viewDir, out float hitDepth) 
         float sceneDepthNorm = texture(colortex3, projectedUV).r;
         float sceneLinearDepth = sceneDepthNorm * farPlane;
         
-        // CRITICAL FIX: Calculate linear depth of our ray position
-        vec3 viewSamplePos = samplePos - cameraPosition;
-        float rayLinearDepth = length(viewSamplePos);
+        // CRITICAL FIX: Calculate linear depth of our ray position in VIEW SPACE
+        // Use -viewSpaceZ, NOT Euclidean distance, for correct depth comparison
+        vec4 viewSamplePos4 = gbufferProjection * vec4(samplePos - cameraPosition, 1.0);
+        float rayLinearDepth = -viewSamplePos4.z / viewSamplePos4.w;  // Extract view-space Z
         
         // Check for intersection with proper depth comparison
         float depthDiff = abs(sceneLinearDepth - rayLinearDepth);
