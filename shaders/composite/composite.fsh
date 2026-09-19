@@ -146,19 +146,19 @@ vec3 applyProperBloom(vec2 uv, vec2 texelSize) {
     // Upsample level 4 → level 3 resolution and ADD to level 3's own blur
     // The bilinear texture sampling during upsampling acts as the filter
     vec3 upsampled4 = texture(colortex10, uv).rgb;  // Bilinear upsample
-    accumulatedGlow = bloomLevel3 + upsampled4;
+    accumulatedGlow += bloomLevel3 + upsampled4;
     
     // Upsample combined (L4+L3) → level 2 resolution and ADD to level 2
     vec3 upsampled3 = texture(colortex9, uv).rgb;
-    accumulatedGlow = bloomLevel2 + upsampled3;
+    accumulatedGlow += bloomLevel2 + upsampled3;
     
     // Upsample combined (L4+L3+L2) → level 1 resolution and ADD to level 1
     vec3 upsampled2 = texture(colortex8, uv).rgb;
-    accumulatedGlow = bloomLevel1 + upsampled2;
+    accumulatedGlow += bloomLevel1 + upsampled2;
     
     // Final upsample to FULL resolution - ADD to get final accumulated glow
     vec3 upsampled1 = texture(colortex7, uv).rgb;
-    accumulatedGlow = accumulatedGlow + upsampled1;  // FIX: Accumulate, don't overwrite
+    accumulatedGlow += upsampled1;  // FIX: Accumulate, don't overwrite
 
     // STEP 4: Apply bloom strength and blend with original color
     return accumulatedGlow * bloomStrength;
