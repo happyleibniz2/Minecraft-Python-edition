@@ -21,6 +21,10 @@ class Vec3(ctypes.Structure):
 Vec3P = ctypes.POINTER(Vec3)
 
 
+class AiString(ctypes.Structure):
+    _fields_ = [('length', ctypes.c_uint), ('data', ctypes.c_char * 1024)]
+
+
 class Face(ctypes.Structure):
     _fields_ = [
         ('mNumIndices', ctypes.c_uint),
@@ -30,9 +34,8 @@ class Face(ctypes.Structure):
 FaceP = ctypes.POINTER(Face)
 
 
-# Correct aiMesh layout matching assimp 5.x header
-# Offsets calculated from: uint(4) * 3 + ptr(8)*4 + ptr(8)*8 + ptr(8)*8 + uint(4)*8 + padding + FaceP
-# = 12 + 32 + 64 + 64 + 32 + 4(padding) = 208, then mFaces @ 208
+# Correct aiMesh layout matching assimp 5.x header (64-bit Linux)
+# Verified offsets: mFaces @ 208, mNumBones @ 216, mBones @ 224, mMaterialIndex @ 232
 class Mesh(ctypes.Structure):
     _fields_ = [
         ('mPrimitiveTypes', ctypes.c_uint),      # offset 0
@@ -46,14 +49,14 @@ class Mesh(ctypes.Structure):
         ('mColors', ctypes.c_void_p * 8),        # offset 48-112 (aiColor4D*[8])
         ('mTextureCoords', Vec3P * 8),           # offset 112-176 (aiVector3D*[8])
         ('mNumUVComponents', ctypes.c_uint * 8), # offset 176-208
-        ('_pad1', ctypes.c_uint),                # offset 208 (alignment padding)
-        ('mFaces', FaceP),                       # offset 212 - CRITICAL: proper Face pointer
-        ('mNumBones', ctypes.c_uint),            # offset 220
-        ('_pad2', ctypes.c_uint),                # offset 224
-        ('mBones', ctypes.c_void_p),             # offset 228
-        ('mMaterialIndex', ctypes.c_uint),       # offset 236
-        ('_pad3', ctypes.c_uint),                # offset 240
-        ('mName', ctypes.c_char * 64),           # offset 244 - simplified aiString
+        # NO _pad1 here! mFaces will naturally align to offset 208
+        ('mFaces', FaceP),                       # offset 208 - CRITICAL: proper Face pointer
+        ('mNumBones', ctypes.c_uint),            # offset 216
+        ('_pad2', ctypes.c_uint),                # offset 220 (alignment for mBones pointer)
+        ('mBones', ctypes.c_void_p),             # offset 224
+        ('mMaterialIndex', ctypes.c_uint),       # offset 232
+        ('_pad3', ctypes.c_uint),                # offset 236 (alignment for mName)
+        ('mName', ctypes.c_char * 1024),         # offset 240 - simplified aiString {uint len; char[1024];}
     ]
 
 
@@ -71,8 +74,47 @@ class Scene(ctypes.Structure):
     ]
 
 
-def load_fbx(path, flags=0x8 | 0x40):  # aiProcess_Triangulate | aiProcess_GenSmoothNormals
-    """Load FBX model with correct struct layouts and proper face index reading."""
+# aiProcess flags
+AI_PROCESS_TRIANGULATE = 0x8
+AI_PROCESS_GEN_SMOOTH_NORMALS = 0x40
+AI_PROCESS_DEBONE = 0x40000000  # Remove bones to avoid bone-related crashes
+AI_PROCESS_PRE_TRANSFORM_VERTICES = 0x100  # Bake node transforms into vertices
+
+def _read_material_names(dll, scene_ptr, num_mats):
+    """Reads real material names from aiMaterial structures using aiGetMaterialString."""
+    names = []
+    if num_mats == 0 or not scene_ptr.contents.mMaterials:
+        return ["default"]
+    
+    # Setup function prototype for aiGetMaterialString
+    # aiReturn aiGetMaterialString(const aiMaterial* pMat, const char* pKey, unsigned int type, unsigned int index, aiString* pOut);
+    dll.aiGetMaterialString.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_uint, ctypes.c_uint, ctypes.POINTER(AiString)]
+    dll.aiGetMaterialString.restype = ctypes.c_int
+    
+    AI_MATKEY_NAME = b"$mat.name"
+    AI_TEXTURE_TYPE_NONE = 0
+    
+    for i in range(num_mats):
+        mat_ptr = scene_ptr.contents.mMaterials[i]
+        out_str = AiString()
+        ret = dll.aiGetMaterialString(mat_ptr, AI_MATKEY_NAME, AI_TEXTURE_TYPE_NONE, 0, ctypes.byref(out_str))
+        if ret == 0 and out_str.length > 0:
+            name = out_str.data[:out_str.length].decode('utf-8', errors='ignore')
+            # Clean up name (remove paths if any)
+            name = os.path.basename(name)
+            names.append(name)
+        else:
+            names.append(f"material_{i}")
+            
+    return names
+
+
+def load_fbx(path, flags=AI_PROCESS_TRIANGULATE | AI_PROCESS_GEN_SMOOTH_NORMALS | AI_PROCESS_DEBONE | AI_PROCESS_PRE_TRANSFORM_VERTICES):
+    """Load FBX model with correct struct layouts and proper face index reading.
+    
+    Uses aiProcess_Debone to remove bones (avoids bone pointer issues)
+    and aiProcess_PreTransformVertices to bake node transforms.
+    """
     dll = _get_dll()
     
     dll.aiImportFile.restype = ctypes.POINTER(Scene)
@@ -86,6 +128,11 @@ def load_fbx(path, flags=0x8 | 0x40):  # aiProcess_Triangulate | aiProcess_GenSm
         raise RuntimeError(f'aiImportFile failed for {path}')
     
     scene = p.contents
+    
+    # Read real material names first
+    material_names = _read_material_names(dll, p, scene.mNumMaterials)
+    print(f"[Vesna FBX] Loaded {scene.mNumMeshes} meshes, {scene.mNumMaterials} materials: {material_names}")
+    
     meshes = []
     
     # Get mesh pointer array
@@ -128,6 +175,8 @@ def load_fbx(path, flags=0x8 | 0x40):  # aiProcess_Triangulate | aiProcess_GenSm
         indices = np.array(indices, dtype=np.uint32)
         
         mat_idx = mesh.mMaterialIndex
+        if mat_idx >= len(material_names):
+            mat_idx = 0
         
         meshes.append({
             'vertices': verts,
@@ -138,7 +187,7 @@ def load_fbx(path, flags=0x8 | 0x40):  # aiProcess_Triangulate | aiProcess_GenSm
             'num_vertices': nv,
             'num_faces': nf,
             'material_index': mat_idx,
-            'material_name': f"material_{mat_idx}",
+            'material_name': material_names[mat_idx],
         })
     
     dll.aiReleaseImport(p)
