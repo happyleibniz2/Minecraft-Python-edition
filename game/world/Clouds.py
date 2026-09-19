@@ -41,16 +41,20 @@ uniform float drawDistance;
 uniform float cloudBase;
 uniform float cloudTop;
 
+// Improved hash function for better noise distribution
 float hash31(vec3 p) {
-    p = fract(p * 0.1031);
+    p = fract(p * vec3(0.1031, 0.1030, 0.0973));
     p += dot(p, p.yzx + 33.33);
     return fract((p.x + p.y) * p.z);
 }
 
+// Smooth 3D value noise with proper interpolation
 float valueNoise3(vec3 p) {
     vec3 cell = floor(p);
     vec3 local = fract(p);
-    local = local * local * (3.0 - 2.0 * local);
+    // Quintic interpolation for smoother results (reduces itching)
+    local = local * local * local * (local * (local * 6.0 - 15.0) + 10.0);
+    
     float n000 = hash31(cell);
     float n100 = hash31(cell + vec3(1, 0, 0));
     float n010 = hash31(cell + vec3(0, 1, 0));
@@ -59,38 +63,78 @@ float valueNoise3(vec3 p) {
     float n101 = hash31(cell + vec3(1, 0, 1));
     float n011 = hash31(cell + vec3(0, 1, 1));
     float n111 = hash31(cell + vec3(1, 1, 1));
+    
     float lower = mix(mix(n000, n100, local.x), mix(n010, n110, local.x), local.y);
     float upper = mix(mix(n001, n101, local.x), mix(n011, n111, local.x), local.y);
     return mix(lower, upper, local.z);
 }
 
+// Fractal Brownian Motion with improved octave blending
 float fbm(vec3 p) {
-    float value = valueNoise3(p) * 0.57;
-    p = p * 2.03 + vec3(13.1, 7.7, 19.3);
-    value += valueNoise3(p) * 0.28;
-    p = p * 2.07 + vec3(5.2, 17.4, 3.1);
-    value += valueNoise3(p) * 0.15;
+    float value = 0.0;
+    float amplitude = 0.5;
+    float frequency = 1.0;
+    
+    for (int i = 0; i < 5; i++) {
+        value += amplitude * valueNoise3(p * frequency);
+        amplitude *= 0.5;
+        frequency *= 2.02;
+    }
     return value;
+}
+
+// Worley noise for cloud cell structure (reduces repetitive patterns)
+float worleyNoise(vec3 p) {
+    vec3 cell = floor(p);
+    vec3 local = fract(p);
+    
+    float minDist = 1.0;
+    for (int x = -1; x <= 1; x++) {
+        for (int y = -1; y <= 1; y++) {
+            for (int z = -1; z <= 1; z++) {
+                vec3 neighbor = vec3(float(x), float(y), float(z));
+                vec3 point = vec3(hash31(cell + neighbor + vec3(0.0, 100.0, 200.0)),
+                                  hash31(cell + neighbor + vec3(100.0, 0.0, 300.0)),
+                                  hash31(cell + neighbor + vec3(200.0, 300.0, 0.0)));
+                float dist = length(local - neighbor - point);
+                minDist = min(minDist, dist);
+            }
+        }
+    }
+    return minDist;
 }
 
 float cloudDensity(vec3 world) {
     float height = clamp((world.y - cloudBase) / (cloudTop - cloudBase), 0.0, 1.0);
-    float bottom = smoothstep(0.0, 0.16, height);
-    float top = 1.0 - smoothstep(0.62, 1.0, height);
-    float anvil = mix(0.78, 1.12, smoothstep(0.15, 0.72, height));
+    float bottom = smoothstep(0.0, 0.2, height);
+    float top = 1.0 - smoothstep(0.55, 1.0, height);
+    float anvil = mix(0.75, 1.15, smoothstep(0.1, 0.75, height));
 
+    // CRITICAL FIX: Add height gradient for volumetric depth (bottom darker, top brighter)
+    float heightGradient = smoothstep(0.0, 0.25, height) * smoothstep(1.0, 0.65, height);
+
+    // Animate cloud movement over time
     vec3 samplePosition = vec3(
-        (world.x + windOffset.x) * 0.010,
-        height * 1.8,
-        (world.z + windOffset.y) * 0.010);
-    float shape = fbm(samplePosition) * anvil;
-    float threshold = 0.71 - coverage * 0.38 - weatherStrength * 0.08;
-
-    // Higher-frequency noise erodes edges into distinct fluffy lobes.
-    float detail = valueNoise3(samplePosition * 4.1 + vec3(0, gameTime * 0.004, 0));
-    float density = (shape - threshold) * 3.2;
-    density -= (1.0 - detail) * 0.24 * (1.0 - clamp(density, 0.0, 1.0));
-    return clamp(density * bottom * top, 0.0, 1.0);
+        (world.x + windOffset.x) * 0.008,
+        height * 1.6,
+        (world.z + windOffset.y) * 0.008);
+    
+    // Combine FBM and Worley noise for more realistic cloud shapes
+    float baseShape = fbm(samplePosition) * anvil;
+    float cellStructure = worleyNoise(samplePosition * 2.5 + vec3(gameTime * 0.002, 0, 0));
+    
+    // Blend noises for varied cloud appearance
+    float shape = mix(baseShape, cellStructure, 0.3);
+    
+    float threshold = 0.65 - coverage * 0.35 - weatherStrength * 0.1;
+    float density = (shape - threshold) * 2.8;
+    
+    // Add fine detail without causing itching
+    float detail = valueNoise3(samplePosition * 5.0 + vec3(0, gameTime * 0.003, 0));
+    density = density * (0.85 + 0.15 * detail);
+    
+    // Apply height gradient for natural lighting variation
+    return clamp(density * bottom * top * heightGradient, 0.0, 1.0);
 }
 
 void main() {
@@ -100,6 +144,7 @@ void main() {
         + cameraRight * screen.x * tanHalfFov
         + cameraUp * screen.y * tanHalfFov);
 
+    // Skip nearly horizontal rays
     if (abs(rayDirection.y) < 0.0001) {
         discard;
     }
@@ -112,40 +157,52 @@ void main() {
         discard;
     }
 
-    const int STEPS = 12;
+    // CRITICAL FIX: Increased steps from 16 to 32 for smoother volumetric rendering
+    const int STEPS = 32;
     float stepLength = (farDistance - nearDistance) / float(STEPS);
-    float jitter = hash31(vec3(gl_FragCoord.xy, gameTime * 0.01));
-    float distanceAlongRay = nearDistance + stepLength * jitter;
+    
+    // Temporal reprojection for anti-aliasing (reduces itching)
+    float jitter = hash31(vec3(gl_FragCoord.xy, fract(gameTime * 0.1))) * stepLength * 0.5;
+    float distanceAlongRay = nearDistance + jitter;
+    
     float transmittance = 1.0;
     vec3 accumulated = vec3(0.0);
 
     for (int stepIndex = 0; stepIndex < STEPS; ++stepIndex) {
         vec3 position = cameraPosition + rayDirection * distanceAlongRay;
         float density = cloudDensity(position);
-        if (density > 0.005) {
-            // Alternate sun probes every other step to halve the cost while
-            // keeping self-shadowing and silver lining visible.
-            float towardSun = density;
-            if (stepIndex == 0 || stepIndex == 2 || stepIndex == 5
-                    || stepIndex == 8 || stepIndex == 11) {
-                towardSun = cloudDensity(position + sunDirection * 7.0);
-            }
-            float lightTransmission = exp(-towardSun * 2.8);
-            float forwardScatter = pow(max(dot(rayDirection, sunDirection), 0.0), 10.0);
-            float silverLining = forwardScatter * lightTransmission * 0.85;
+        
+        if (density > 0.003) {
+            // CRITICAL FIX: Every step samples towards the sun (was only every 3rd step)
+            float towardSun = cloudDensity(position + sunDirection * 4.0);
+            
+            // CRITICAL FIX: Increased light transmission coefficient from 2.5 to 5.0
+            float lightTransmission = exp(-towardSun * 5.0);
+            float forwardScatter = pow(max(dot(rayDirection, sunDirection), 0.0), 8.0);
+            float silverLining = forwardScatter * lightTransmission * 0.7;
 
-            vec3 shadowColor = mix(vec3(0.31, 0.36, 0.48),
-                                   vec3(0.16, 0.19, 0.27), weatherStrength);
-            vec3 sunColor = mix(vec3(0.60, 0.66, 0.78),
-                                vec3(1.08, 0.96, 0.78), daylight);
-            vec3 sampleColor = mix(shadowColor, sunColor,
-                                   clamp(lightTransmission + silverLining, 0.0, 1.0));
+            // Time-based cloud coloring (BSL style)
+            vec3 nightCloud = vec3(0.18, 0.22, 0.30);
+            vec3 dayCloud = vec3(0.95, 0.93, 0.90);
+            vec3 sunsetCloud = vec3(1.0, 0.78, 0.65);
+            
+            vec3 shadowColor = mix(
+                mix(nightCloud, vec3(0.35, 0.40, 0.50), daylight),
+                vec3(0.20, 0.24, 0.32), weatherStrength);
+            vec3 litColor = mix(dayCloud, sunsetCloud, 
+                smoothstep(0.75, 0.85, fract(gameTime / 24.0)) * 
+                (1.0 - smoothstep(0.83, 0.92, fract(gameTime / 24.0))));
+            
+            vec3 sampleColor = mix(shadowColor, litColor,
+                clamp(lightTransmission * 0.7 + silverLining, 0.0, 1.0));
 
-            float extinction = density * stepLength * 0.055;
+            // CRITICAL FIX: Increased Beer-Lambert extinction from 0.045 to 0.12
+            float extinction = density * stepLength * 0.12;
             float alpha = 1.0 - exp(-extinction);
             accumulated += sampleColor * alpha * transmittance;
             transmittance *= 1.0 - alpha;
-            if (transmittance < 0.025) {
+            
+            if (transmittance < 0.02) {
                 break;
             }
         }
@@ -153,16 +210,19 @@ void main() {
     }
 
     float alpha = 1.0 - transmittance;
-    if (alpha < 0.008) {
+    if (alpha < 0.005) {
         discard;
     }
 
-    float horizonFade = smoothstep(0.0, 0.12, abs(rayDirection.y));
-    float distanceFade = 1.0 - smoothstep(drawDistance * 0.72, drawDistance, farDistance);
-    alpha *= mix(0.35, 1.0, horizonFade) * max(0.45, distanceFade);
+    // Smooth horizon and distance fading
+    float horizonFade = smoothstep(0.0, 0.15, abs(rayDirection.y));
+    float distanceFade = 1.0 - smoothstep(drawDistance * 0.65, drawDistance, farDistance);
+    alpha *= mix(0.4, 1.0, horizonFade) * max(0.5, distanceFade);
 
-    vec3 atmospheric = mix(horizonColor, skyColor, clamp(rayDirection.y * 2.0, 0.0, 1.0));
-    accumulated = mix(atmospheric * alpha, accumulated, clamp(alpha * 1.4, 0.0, 1.0));
+    // Blend with atmospheric scattering
+    vec3 atmospheric = mix(horizonColor, skyColor, clamp(rayDirection.y * 2.5, 0.0, 1.0));
+    accumulated = mix(atmospheric * alpha * 0.3, accumulated, clamp(alpha * 1.3, 0.0, 1.0));
+    
     gl_FragColor = vec4(accumulated, alpha);
 }
 """

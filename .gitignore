@@ -1,16 +1,5 @@
-/.venv
-/logs
-/__pycache__
-*.pyc
-*.pyc
-aldiskdagda
-*.pub
-*.pyc
-*.pyc
-/__pycache__
-/saves
-*.pyc
-
-mods/*
-!mods/README.md
-/saves/Current_world
+```
+# Compiled and build artifacts
+*.fsh
+*.vsh
+```

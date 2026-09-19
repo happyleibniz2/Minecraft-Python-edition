@@ -1,4 +1,5 @@
 import json
+import math
 import os
 import time
 from dataclasses import dataclass
@@ -88,20 +89,56 @@ def configure_water_textures(scene):
     scene.water_overlay = scene.texture.get("water_overlay")
 
 
-def water_face_vertices(pos, face_index, height, lower_height=0):
+def water_face_vertices(pos, face_index, height, lower_height=0, gameTime=0.0):
+    """Generate water face vertices with wave displacement for realistic fluid motion."""
     x, y, z = pos
     x0, x1 = x - 0.5, x + 0.5
     z0, z1 = z - 0.5, z + 0.5
-    bottom = y - 0.5 + lower_height
-    top = y - 0.5 + height
-    faces = (
-        (x0, bottom, z0, x0, bottom, z1, x0, top, z1, x0, top, z0),
-        (x1, bottom, z1, x1, bottom, z0, x1, top, z0, x1, top, z1),
-        (x0, bottom, z0, x1, bottom, z0, x1, bottom, z1, x0, bottom, z1),
-        (x0, top, z1, x1, top, z1, x1, top, z0, x0, top, z0),
-        (x1, bottom, z0, x0, bottom, z0, x0, top, z0, x1, top, z0),
-        (x0, bottom, z1, x1, bottom, z1, x1, top, z1, x0, top, z1),
-    )
+    
+    # CRITICAL FIX: Add vertex displacement for wave animation
+    # Three combined sine waves with different frequencies and speeds
+    def waveHeight(vx, vz, t):
+        w1 = math.sin(vx * 0.8 + t * 1.5) * 0.06
+        w2 = math.sin(vz * 0.6 + t * 1.1) * 0.04
+        w3 = math.sin((vx + vz) * 1.2 + t * 2.0) * 0.02
+        return w1 + w2 + w3
+    
+    # Apply wave displacement to water surface vertices
+    if face_index == 3:  # Top surface
+        h00 = waveHeight(x0, z0, gameTime)
+        h01 = waveHeight(x0, z1, gameTime)
+        h11 = waveHeight(x1, z1, gameTime)
+        h10 = waveHeight(x1, z0, gameTime)
+        top_base = y - 0.5 + height
+        faces = (
+            (x0, y - 0.5 + lower_height, z0, x0, y - 0.5 + lower_height, z1, x0, top_base, z1, x0, top_base, z0),
+            (x1, y - 0.5 + lower_height, z1, x1, y - 0.5 + lower_height, z0, x1, top_base, z0, x1, top_base, z1),
+            (x0, y - 0.5 + lower_height, z0, x1, y - 0.5 + lower_height, z0, x1, y - 0.5 + lower_height, z1, x0, y - 0.5 + lower_height, z1),
+            # Top face with displaced vertices for wave effect
+            (x0, top_base + h00, z0, x1, top_base + h10, z0, x1, top_base + h11, z1, x0, top_base + h01, z1),
+            (x1, y - 0.5 + lower_height, z0, x0, y - 0.5 + lower_height, z0, x0, top_base + h00, z0, x1, top_base + h10, z0),
+            (x0, y - 0.5 + lower_height, z1, x1, y - 0.5 + lower_height, z1, x1, top_base + h11, z1, x0, top_base + h01, z1),
+        )
+    else:
+        # Side faces - use simpler displacement
+        bottom = y - 0.5 + lower_height
+        top = y - 0.5 + height
+        # Add slight wave to top edge of side faces
+        wave_top = 0.0
+        if face_index in (0, 1, 4, 5):  # Side faces
+            mid_x = (x0 + x1) * 0.5 if face_index in (0, 1) else x0
+            mid_z = (z0 + z1) * 0.5 if face_index in (4, 5) else z0
+            wave_top = waveHeight(mid_x, mid_z, gameTime) * 0.5
+        
+        faces = (
+            (x0, bottom, z0, x0, bottom, z1, x0, top + wave_top, z1, x0, top + wave_top, z0),
+            (x1, bottom, z1, x1, bottom, z0, x1, top + wave_top, z0, x1, top + wave_top, z1),
+            (x0, bottom, z0, x1, bottom, z0, x1, bottom, z1, x0, bottom, z1),
+            (x0, top, z1, x1, top, z1, x1, top, z0, x0, top, z0),
+            (x1, bottom, z0, x0, bottom, z0, x0, top, z0, x1, top, z0),
+            (x0, bottom, z1, x1, bottom, z1, x1, top, z1, x0, top, z1),
+        )
+    
     return faces[face_index]
 
 

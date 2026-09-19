@@ -443,7 +443,9 @@ class CubeHandler:
         neighbour = (cube.p[0] + dx, cube.p[1] + dy, cube.p[2] + dz)
         if face_index not in (2, 3) and neighbour in self.fluids:
             lower_height = min(height, self.get_water_height(neighbour))
-        return water_face_vertices(cube.p, face_index, height, lower_height)
+        # Pass gameTime for wave animation
+        gameTime = getattr(getattr(self.gl, 'light', None), 'elapsed', 0.0)
+        return water_face_vertices(cube.p, face_index, height, lower_height, gameTime)
 
     def get_face_texture(self, cube, face_index):
         if cube.name == "water" and face_index == 3:
