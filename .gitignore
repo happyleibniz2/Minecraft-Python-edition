@@ -1,7 +1,46 @@
 ```
-# Compiled and build artifacts
-*.fsh
-*.vsh
-```
-/logs
+# Compiled Python files
 *.pyc
+__pycache__/
+
+# Dependencies
+.venv/
+venv/
+node_modules/
+
+# Logs and temporary files
+*.log
+*.tmp
+*.swp
+
+# Environment files
+.env
+.env.local
+*.env.*
+
+# Editors
+.vscode/
+.idea/
+
+# Build artifacts
+dist/
+build/
+target/
+
+# Coverage reports
+coverage/
+htmlcov/
+.coverage
+
+# Python specific
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+.Python
+*.egg
+
+# OS generated files
+.DS_Store
+Thumbs.db
+```
