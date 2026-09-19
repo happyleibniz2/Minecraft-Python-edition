@@ -4,11 +4,16 @@ import os
 import numpy as np
 
 try:
-    import assimp
-    import assimp.types
+    import pyassimp as assimp
+    import pyassimp.types as types
     HAS_ASSIMP = True
 except ImportError:
-    HAS_ASSIMP = False
+    try:
+        import assimp
+        import assimp.types
+        HAS_ASSIMP = True
+    except ImportError:
+        HAS_ASSIMP = False
 
 
 def _read_material_names(scene):
