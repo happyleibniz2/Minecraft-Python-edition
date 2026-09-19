@@ -2,5 +2,25 @@
   "id": "vesna",
   "version": "1.0.0",
   "dependencies": [],
-  "entry": "mod.py"
+  "entry": "mod.py",
+  "texture_map": {
+    "Avatar_Girl_Sword_Vesna_Mat_Body": "Avatar_Girl_Sword_Vesna_Tex_Body_Diffuse.png",
+    "Avatar_Girl_Sword_Vesna_Mat_Body01": "Avatar_Girl_Sword_Vesna_Tex_Dress_Diffuse.png",
+    "Avatar_Girl_Sword_Vesna_Mat_Brow": "Avatar_Girl_Sword_Vesna_Tex_Face_Diffuse.png",
+    "Avatar_Girl_Sword_Vesna_Mat_Crystal": "Avatar_Girl_Sword_Vesna_Tex_Crystal_Diffuse.png",
+    "Avatar_Girl_Sword_Vesna_Mat_Crystal01": "Avatar_Girl_Sword_Vesna_Tex_Hair_Diffuse.png",
+    "Avatar_Girl_Sword_Vesna_Mat_Dress": "Avatar_Girl_Sword_Vesna_Tex_Dress_Diffuse.png",
+    "Avatar_Girl_Sword_Vesna_Mat_Eye": "Avatar_Girl_Sword_Vesna_Tex_Face_Diffuse.png",
+    "Avatar_Girl_Sword_Vesna_Mat_Face": "Avatar_Girl_Sword_Vesna_Tex_Face_Diffuse.png",
+    "Avatar_Girl_Sword_Vesna_Mat_Hair": "Avatar_Girl_Sword_Vesna_Tex_Hair_Diffuse.png",
+    "Avatar_Girl_Sword_Vesna_Mat_Pupil": "Avatar_Girl_Sword_Vesna_Tex_Pupil01_Diffuse.png",
+    "Avatar_Girl_Sword_Vesna_Mat_Wing": "Avatar_Girl_Sword_Vesna_Tex_Hair_Diffuse.png",
+    "Avatar_Girl_Sword_Vesna_Mat_Wing01": "Avatar_Girl_Sword_Vesna_Tex_Hair_Diffuse.png"
+  },
+  "uv_channel": 0,
+  "uv_flip_v": false,
+  "model_scale": 1.8,
+  "ground_offset": -1.25,
+  "model_rotation_y": 180.0,
+  "model_offset": 0.0
 }

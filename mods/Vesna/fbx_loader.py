@@ -1,194 +1,173 @@
-"""FBX loader using ctypes with CORRECT assimp aiMesh struct layout."""
+"""FBX loader for the project's Assimp 5.2.5 Windows DLL."""
 import ctypes
 import os
 
 import numpy as np
 
+
+DLL_PATH = os.path.abspath(os.path.join(
+    os.path.dirname(__file__), "..", "..", "assimp-vc143-mt.dll"))
+AI_PROCESS_TRIANGULATE = 0x8
+AI_PROCESS_GEN_SMOOTH_NORMALS = 0x40
+AI_PROCESS_PRE_TRANSFORM_VERTICES = 0x100
 _DLL = None
-def _get_dll():
-    global _DLL
-    if _DLL is None:
-        try:
-            _DLL = ctypes.CDLL("libassimp.so.5")
-        except:
-            _DLL = ctypes.CDLL("libassimp.so.4")
-    return _DLL
 
 
 class Vec3(ctypes.Structure):
-    _fields_ = [('x', ctypes.c_float), ('y', ctypes.c_float), ('z', ctypes.c_float)]
-
-Vec3P = ctypes.POINTER(Vec3)
-
-
-class AiString(ctypes.Structure):
-    _fields_ = [('length', ctypes.c_uint), ('data', ctypes.c_char * 1024)]
+    _fields_ = [("x", ctypes.c_float),
+                ("y", ctypes.c_float),
+                ("z", ctypes.c_float)]
 
 
 class Face(ctypes.Structure):
-    _fields_ = [
-        ('mNumIndices', ctypes.c_uint),
-        ('mIndices', ctypes.POINTER(ctypes.c_uint)),
-    ]
+    _fields_ = [("mNumIndices", ctypes.c_uint),
+                ("mIndices", ctypes.POINTER(ctypes.c_uint))]
 
+
+class AiString(ctypes.Structure):
+    _fields_ = [("length", ctypes.c_size_t),
+                ("data", ctypes.c_char * 1024)]
+
+
+Vec3P = ctypes.POINTER(Vec3)
 FaceP = ctypes.POINTER(Face)
 
 
-# Correct aiMesh layout matching assimp 5.x header (64-bit Linux)
-# Verified offsets: mFaces @ 208, mNumBones @ 216, mBones @ 224, mMaterialIndex @ 232
-class Mesh(ctypes.Structure):
-    _fields_ = [
-        ('mPrimitiveTypes', ctypes.c_uint),      # offset 0
-        ('mNumVertices', ctypes.c_uint),         # offset 4
-        ('mNumFaces', ctypes.c_uint),            # offset 8
-        ('_pad0', ctypes.c_uint),                # offset 12 (alignment)
-        ('mVertices', Vec3P),                    # offset 16
-        ('mNormals', Vec3P),                     # offset 24
-        ('mTangents', Vec3P),                    # offset 32
-        ('mBitangents', Vec3P),                  # offset 40
-        ('mColors', ctypes.c_void_p * 8),        # offset 48-112 (aiColor4D*[8])
-        ('mTextureCoords', Vec3P * 8),           # offset 112-176 (aiVector3D*[8])
-        ('mNumUVComponents', ctypes.c_uint * 8), # offset 176-208
-        # NO _pad1 here! mFaces will naturally align to offset 208
-        ('mFaces', FaceP),                       # offset 208 - CRITICAL: proper Face pointer
-        ('mNumBones', ctypes.c_uint),            # offset 216
-        ('_pad2', ctypes.c_uint),                # offset 220 (alignment for mBones pointer)
-        ('mBones', ctypes.c_void_p),             # offset 224
-        ('mMaterialIndex', ctypes.c_uint),       # offset 232
-        ('_pad3', ctypes.c_uint),                # offset 236 (alignment for mName)
-        ('mName', ctypes.c_char * 1024),         # offset 240 - simplified aiString {uint len; char[1024];}
+def _get_dll():
+    global _DLL
+    if _DLL is None:
+        _DLL = ctypes.CDLL(DLL_PATH)
+    return _DLL
+
+
+def _material_names(dll, scene):
+    if not scene.mMaterials or scene.mNumMaterials == 0:
+        return []
+
+    dll.aiGetMaterialString.argtypes = [
+        ctypes.c_void_p, ctypes.c_char_p, ctypes.c_uint, ctypes.c_uint,
+        ctypes.POINTER(AiString),
     ]
-
-
-class Scene(ctypes.Structure):
-    _fields_ = [
-        ('mFlags', ctypes.c_uint),
-        ('_pad0', ctypes.c_uint),
-        ('mRootNode', ctypes.c_void_p),
-        ('mNumMeshes', ctypes.c_uint),
-        ('_pad1', ctypes.c_uint),
-        ('mMeshes', ctypes.POINTER(ctypes.c_void_p)),  # aiMesh**
-        ('mNumMaterials', ctypes.c_uint),
-        ('_pad2', ctypes.c_uint),
-        ('mMaterials', ctypes.POINTER(ctypes.c_void_p)),
-    ]
-
-
-# aiProcess flags
-AI_PROCESS_TRIANGULATE = 0x8
-AI_PROCESS_GEN_SMOOTH_NORMALS = 0x40
-AI_PROCESS_DEBONE = 0x40000000  # Remove bones to avoid bone-related crashes
-AI_PROCESS_PRE_TRANSFORM_VERTICES = 0x100  # Bake node transforms into vertices
-
-def _read_material_names(dll, scene_ptr, num_mats):
-    """Reads real material names from aiMaterial structures using aiGetMaterialString."""
-    names = []
-    if num_mats == 0 or not scene_ptr.contents.mMaterials:
-        return ["default"]
-    
-    # Setup function prototype for aiGetMaterialString
-    # aiReturn aiGetMaterialString(const aiMaterial* pMat, const char* pKey, unsigned int type, unsigned int index, aiString* pOut);
-    dll.aiGetMaterialString.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_uint, ctypes.c_uint, ctypes.POINTER(AiString)]
     dll.aiGetMaterialString.restype = ctypes.c_int
-    
-    AI_MATKEY_NAME = b"$mat.name"
-    AI_TEXTURE_TYPE_NONE = 0
-    
-    for i in range(num_mats):
-        mat_ptr = scene_ptr.contents.mMaterials[i]
-        out_str = AiString()
-        ret = dll.aiGetMaterialString(mat_ptr, AI_MATKEY_NAME, AI_TEXTURE_TYPE_NONE, 0, ctypes.byref(out_str))
-        if ret == 0 and out_str.length > 0:
-            name = out_str.data[:out_str.length].decode('utf-8', errors='ignore')
-            # Clean up name (remove paths if any)
-            name = os.path.basename(name)
-            names.append(name)
+    materials = ctypes.cast(
+        scene.mMaterials, ctypes.POINTER(ctypes.c_void_p))
+    names = []
+    for index in range(scene.mNumMaterials):
+        value = AiString()
+        result = dll.aiGetMaterialString(
+            materials[index], b"?mat.name", 0, 0, ctypes.byref(value))
+        if result == 0 and value.length:
+            names.append(value.data[:value.length].decode(
+                "utf-8", errors="replace"))
         else:
-            names.append(f"material_{i}")
-            
+            names.append(f"material_{index}")
     return names
 
 
-def load_fbx(path, flags=AI_PROCESS_TRIANGULATE | AI_PROCESS_GEN_SMOOTH_NORMALS | AI_PROCESS_DEBONE | AI_PROCESS_PRE_TRANSFORM_VERTICES):
-    """Load FBX model with correct struct layouts and proper face index reading.
-    
-    Uses aiProcess_Debone to remove bones (avoids bone pointer issues)
-    and aiProcess_PreTransformVertices to bake node transforms.
+def load_fbx(path, flags=(AI_PROCESS_TRIANGULATE |
+                          AI_PROCESS_GEN_SMOOTH_NORMALS |
+                          AI_PROCESS_PRE_TRANSFORM_VERTICES)):
+    """Return mesh arrays copied out of Assimp-owned memory.
+
+    ``uvs`` is always UV channel zero. ``all_uvs`` preserves every channel.
     """
     dll = _get_dll()
-    
+
+    # Empirically verified for assimp-vc143-mt.dll on Windows x64.
+    class Mesh(ctypes.Structure):
+        _fields_ = [
+            ("mPrimitiveTypes", ctypes.c_uint),
+            ("mNumVertices", ctypes.c_uint),
+            ("mNumFaces", ctypes.c_uint),
+            ("_pad0", ctypes.c_uint),
+            ("mVertices", Vec3P),
+            ("mNormals", Vec3P),
+            ("mTangents", Vec3P),
+            ("mBitangents", Vec3P),
+            ("mTextureCoords", Vec3P * 8),
+            ("mNumUVComponents", ctypes.c_uint * 8),
+            ("mFaces", FaceP),
+            ("mNumBones", ctypes.c_uint),
+            ("_pad1", ctypes.c_uint),
+            ("mBones", ctypes.c_void_p),
+            ("mMaterialIndex", ctypes.c_uint),
+        ]
+
+    class Scene(ctypes.Structure):
+        _fields_ = [
+            ("mFlags", ctypes.c_uint), ("_pad0", ctypes.c_uint),
+            ("mRootNode", ctypes.c_void_p),
+            ("mNumMeshes", ctypes.c_uint), ("_pad1", ctypes.c_uint),
+            ("mMeshes", ctypes.POINTER(ctypes.POINTER(Mesh))),
+            ("mNumMaterials", ctypes.c_uint), ("_pad2", ctypes.c_uint),
+            ("mMaterials", ctypes.c_void_p),
+        ]
+
     dll.aiImportFile.restype = ctypes.POINTER(Scene)
     dll.aiImportFile.argtypes = [ctypes.c_char_p, ctypes.c_uint]
     dll.aiReleaseImport.restype = None
     dll.aiReleaseImport.argtypes = [ctypes.POINTER(Scene)]
-    
-    abs_path = os.path.abspath(path).encode()
-    p = dll.aiImportFile(abs_path, flags)
-    if not p:
-        raise RuntimeError(f'aiImportFile failed for {path}')
-    
-    scene = p.contents
-    
-    # Read real material names first
-    material_names = _read_material_names(dll, p, scene.mNumMaterials)
-    print(f"[Vesna FBX] Loaded {scene.mNumMeshes} meshes, {scene.mNumMaterials} materials: {material_names}")
-    
-    meshes = []
-    
-    # Get mesh pointer array
-    MeshPtrArray = ctypes.POINTER(ctypes.c_void_p * scene.mNumMeshes)
-    mesh_ptrs = ctypes.cast(scene.mMeshes, MeshPtrArray).contents
-    
-    for i in range(scene.mNumMeshes):
-        mp = mesh_ptrs[i]
-        mesh = ctypes.cast(mp, ctypes.POINTER(Mesh)).contents
-        
-        nv = mesh.mNumVertices
-        nf = mesh.mNumFaces
-        
-        # Vertices
-        verts_arr = np.ctypeslib.as_array(mesh.mVertices, (nv,))
-        verts = np.column_stack([verts_arr['x'], verts_arr['y'], verts_arr['z']]).astype(np.float32)
-        
-        # Normals
-        norms = None
-        if mesh.mNormals:
-            n_arr = np.ctypeslib.as_array(mesh.mNormals, (nv,))
-            norms = np.column_stack([n_arr['x'], n_arr['y'], n_arr['z']]).astype(np.float32)
-        
-        # UV coordinates
-        all_uvs = {}
-        for ch in range(8):
-            if mesh.mTextureCoords[ch]:
-                u_arr = np.ctypeslib.as_array(mesh.mTextureCoords[ch], (nv,))
-                uv_data = np.column_stack([u_arr['x'], u_arr['y']]).astype(np.float32)
-                all_uvs[ch] = uv_data
-        
-        primary_uvs = all_uvs.get(0, None)
-        
-        # CRITICAL FIX: Read face indices properly from aiFace structures
-        indices = []
-        for j in range(nf):
-            face = mesh.mFaces[j]
-            for k in range(face.mNumIndices):
-                indices.append(face.mIndices[k])
-        indices = np.array(indices, dtype=np.uint32)
-        
-        mat_idx = mesh.mMaterialIndex
-        if mat_idx >= len(material_names):
-            mat_idx = 0
-        
-        meshes.append({
-            'vertices': verts,
-            'normals': norms,
-            'uvs': primary_uvs,
-            'all_uvs': all_uvs,
-            'indices': indices,
-            'num_vertices': nv,
-            'num_faces': nf,
-            'material_index': mat_idx,
-            'material_name': material_names[mat_idx],
-        })
-    
-    dll.aiReleaseImport(p)
-    return meshes
+
+    scene_pointer = dll.aiImportFile(os.path.abspath(path).encode(), flags)
+    if not scene_pointer:
+        raise RuntimeError(f"Assimp failed to import {path}")
+
+    try:
+        scene = scene_pointer.contents
+        material_names = _material_names(dll, scene)
+        meshes = []
+        for mesh_index in range(scene.mNumMeshes):
+            mesh = scene.mMeshes[mesh_index].contents
+            vertex_count = mesh.mNumVertices
+
+            source = np.ctypeslib.as_array(mesh.mVertices, (vertex_count,))
+            vertices = np.column_stack(
+                [source["x"], source["y"], source["z"]]).astype(
+                    np.float32, copy=True)
+
+            normals = None
+            if mesh.mNormals:
+                source = np.ctypeslib.as_array(mesh.mNormals, (vertex_count,))
+                normals = np.column_stack(
+                    [source["x"], source["y"], source["z"]]).astype(
+                        np.float32, copy=True)
+
+            all_uvs = {}
+            for channel in range(8):
+                if mesh.mTextureCoords[channel]:
+                    source = np.ctypeslib.as_array(
+                        mesh.mTextureCoords[channel], (vertex_count,))
+                    all_uvs[channel] = np.column_stack(
+                        [source["x"], source["y"]]).astype(
+                            np.float32, copy=True)
+
+            face_indices = []
+            for face_index in range(mesh.mNumFaces):
+                face = mesh.mFaces[face_index]
+                if face.mNumIndices != 3:
+                    raise RuntimeError(
+                        f"Mesh {mesh_index} face {face_index} was not triangulated")
+                face_indices.extend(face.mIndices[i] for i in range(3))
+            indices = np.asarray(face_indices, dtype=np.uint32)
+            if len(indices) and int(indices.max()) >= vertex_count:
+                raise RuntimeError(
+                    f"Mesh {mesh_index} has an out-of-range face index")
+
+            material_index = mesh.mMaterialIndex
+            material_name = (material_names[material_index]
+                             if material_index < len(material_names)
+                             else f"material_{material_index}")
+            meshes.append({
+                "vertices": vertices,
+                "normals": normals,
+                "uvs": all_uvs.get(0),
+                "all_uvs": all_uvs,
+                "indices": indices,
+                "num_vertices": vertex_count,
+                "num_faces": mesh.mNumFaces,
+                "material_index": material_index,
+                "material_name": material_name,
+            })
+        return meshes
+    finally:
+        dll.aiReleaseImport(scene_pointer)
