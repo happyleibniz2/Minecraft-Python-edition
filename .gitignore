@@ -9,32 +9,30 @@ __pycache__/
 .venv/
 venv/
 env/
-pip-log.txt
-pipenv.lock
-requirements.txt.bak
+.env
+.env.local
+.env.*
 
 # Build artifacts
-build/
 dist/
+build/
 *.egg-info/
-.sass-cache/
 
-# Logs
-*.log
-
-# OS generated files
-.DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
-
-# Editor files
+# Editors
 .vscode/
 .idea/
 *.swp
 *.swo
-*~
+
+# Logs
+*.log
+
+# Coverage
+.coverage
+coverage/
+htmlcov/
+
+# OS
+.DS_Store
+Thumbs.db
 ```
