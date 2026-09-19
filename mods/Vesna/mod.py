@@ -24,13 +24,22 @@ def _load_fbx_loader():
 
 
 def _build_material_texture_map():
-    """Read material JSONs and extract _MainTex name for each material."""
+    """Read material JSONs and extract _MainTex name for each material.
+    
+    Returns a dict mapping material_index (int) to texture path.
+    Since pyassimp can't read material names from FBX properly, we use material_index
+    to match meshes with materials. Materials are assumed to be loaded by assimp in
+    the same order as they appear in the FBX file, which typically matches alphabetical
+    order of the Unity material asset filenames.
+    """
     mat_map = {}
     if not os.path.isdir(MAT_DIR):
         return mat_map
-    for fname in os.listdir(MAT_DIR):
-        if not fname.endswith('.json'):
-            continue
+    
+    # Get all material JSON files sorted alphabetically
+    mat_files = sorted([f for f in os.listdir(MAT_DIR) if f.endswith('.json')])
+    
+    for idx, fname in enumerate(mat_files):
         mat_name = fname.replace('.json', '')
         try:
             with open(os.path.join(MAT_DIR, fname), 'r') as f:
@@ -42,9 +51,9 @@ def _build_material_texture_map():
             if tex_name and not is_null:
                 tex_path = os.path.join(TEX_DIR, tex_name + '.png')
                 if os.path.isfile(tex_path):
-                    mat_map[mat_name] = tex_path
+                    mat_map[idx] = tex_path  # Use index as key instead of name
                 else:
-                    mat_map[mat_name] = tex_path
+                    mat_map[idx] = tex_path
         except Exception:
             pass
     return mat_map
@@ -106,7 +115,8 @@ class Vesna(PassiveMob):
             mat_name = mesh.get('material_name', '')
             mat_idx = mesh['material_index']
 
-            tex_file = mat_tex_map.get(mat_name, '')
+            # Use material_index (int) to look up texture path since pyassimp can't read material names
+            tex_file = mat_tex_map.get(mat_idx, '')
             tex_id = 0
 
             if tex_file and os.path.isfile(tex_file):

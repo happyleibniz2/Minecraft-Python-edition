@@ -1,31 +1,26 @@
 ```
-# Python cache files
+# Python
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
 
-# Build artifacts
-build/
+# Build and distribution artifacts
 dist/
+build/
 *.egg-info/
 
-# Logs and temp files
+# Virtual environments
+venv/
+.venv/
+env/
+.ENV/
+
+# Logs
 *.log
+
+# Temporary files
 *.tmp
-
-# Environment files
-.env
-.env.local
-*.env.*
-
-# Editors
-.vscode/
-.idea/
 *.swp
-*.swo
-
-# OS specific
-.DS_Store
-Thumbs.db
+*~
 ```
