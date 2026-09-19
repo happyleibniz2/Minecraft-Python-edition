@@ -3,3 +3,5 @@
 *.fsh
 *.vsh
 ```
+/logs
+*.pyc
