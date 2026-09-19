@@ -111,7 +111,7 @@ vec3 applyProperBloom(vec2 uv, vec2 texelSize) {
         return vec3(0.0);
     }
 
-    // STEP 1: Extract bright highlights with luminance threshold
+    // STEP 1: Extract bright highlights with luminance threshold from full-res color
     vec3 baseColor = texture(colortex0, uv).rgb;
     float luminance = dot(baseColor, vec3(0.2126, 0.7152, 0.0722));
     float threshold = 0.85;  // Only pixels brighter than this contribute to bloom
@@ -120,38 +120,47 @@ vec3 applyProperBloom(vec2 uv, vec2 texelSize) {
     float brightness = max(0.0, luminance - threshold);
     vec3 extractedHighlights = baseColor * (brightness / max(luminance, 0.001));
 
-    // STEP 2: Build Gaussian pyramid - each level is blurred version of previous
-    // Level 0: Full resolution highlights (sharp core)
-    vec3 bloomLevel0 = extractedHighlights;
+    // STEP 2: Build TRUE multi-resolution pyramid using pre-downsampled buffers
+    // colortex7 = half resolution, colortex8 = quarter, colortex9 = eighth, colortex10 = sixteenth
+    // Each level is blurred at its NATIVE resolution for efficiency
+    
+    // Level 1: Half resolution (colortex7) - small blur
+    vec3 bloomLevel1 = gaussianBlur(colortex7, uv, texelSize * 2.0, 1.2);
+    
+    // Level 2: Quarter resolution (colortex8) - medium blur
+    vec3 bloomLevel2 = gaussianBlur(colortex8, uv, texelSize * 4.0, 1.8);
+    
+    // Level 3: Eighth resolution (colortex9) - large blur
+    vec3 bloomLevel3 = gaussianBlur(colortex9, uv, texelSize * 8.0, 2.5);
+    
+    // Level 4: Sixteenth resolution (colortex10) - widest ambient glow
+    vec3 bloomLevel4 = gaussianBlur(colortex10, uv, texelSize * 16.0, 3.5);
 
-    // Level 1: Blur with radius 1.5 (simulates 1/2 res downsample)
-    vec3 bloomLevel1 = gaussianBlur(colortex0, uv, texelSize * 1.5, 1.2);
+    // STEP 3: CRITICAL - Upsample and ACCUMULATE in true pyramid fashion
+    // Start from LOWEST resolution (most blurred) and work UP
+    // Each level adds the upsampled result from the level BELOW it
     
-    // Level 2: Blur with radius 2.5 (simulates 1/4 res downsample)  
-    vec3 bloomLevel2 = gaussianBlur(colortex0, uv, texelSize * 3.0, 2.0);
+    // Start with smallest resolution (level 4 - sixteenth res)
+    vec3 accumulatedGlow = bloomLevel4;
     
-    // Level 3: Blur with radius 4.0 (simulates 1/8 res downsample - widest glow)
-    vec3 bloomLevel3 = gaussianBlur(colortex0, uv, texelSize * 6.0, 3.5);
+    // Upsample level 4 → level 3 resolution and ADD to level 3's own blur
+    // The bilinear texture sampling during upsampling acts as the filter
+    vec3 upsampled4 = texture(colortex10, uv).rgb;  // Bilinear upsample
+    accumulatedGlow = bloomLevel3 + upsampled4;
+    
+    // Upsample combined (L4+L3) → level 2 resolution and ADD to level 2
+    vec3 upsampled3 = texture(colortex9, uv).rgb;
+    accumulatedGlow = bloomLevel2 + upsampled3;
+    
+    // Upsample combined (L4+L3+L2) → level 1 resolution and ADD to level 1
+    vec3 upsampled2 = texture(colortex8, uv).rgb;
+    accumulatedGlow = bloomLevel1 + upsampled2;
+    
+    // Final upsample to FULL resolution and blend with original scene
+    vec3 upsampled1 = texture(colortex7, uv).rgb;
+    accumulatedGlow = upsampled1;  // Final accumulated glow at full res
 
-    // STEP 3: CRITICAL - Upsample and ACCUMULATE in pyramid fashion
-    // Each level must add the upsampled result from the level below it
-    // This creates continuous, layered glow instead of discrete rings
-    
-    // Start from smallest (most blurred) level
-    vec3 accumulatedGlow = bloomLevel3;
-    
-    // Upsample level 3 -> add to level 2
-    vec3 upsampledL3 = gaussianBlur(colortex0, uv, texelSize * 3.0, 2.0);
-    accumulatedGlow = bloomLevel2 + upsampledL3;
-    
-    // Upsample combined (L2+L3) -> add to level 1
-    vec3 upsampledL2 = gaussianBlur(colortex0, uv, texelSize * 1.5, 1.2);
-    accumulatedGlow = bloomLevel1 + upsampledL2;
-    
-    // Upsample combined (L1+L2+L3) -> add to level 0
-    accumulatedGlow = bloomLevel0 + accumulatedGlow;
-
-    // STEP 4: Apply bloom strength and return
+    // STEP 4: Apply bloom strength and blend with original color
     return accumulatedGlow * bloomStrength;
 }
 
