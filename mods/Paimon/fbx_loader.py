@@ -1,81 +1,116 @@
-"""FBX loader using pyassimp."""
+"""FBX loader using assimp DLL via ctypes.
+
+Correct struct layout for assimp 5.2.5 on Linux x64.
+Note: Material name extraction from FBX is unreliable across platforms.
+Material names should be matched via the mod's material JSON files.
+"""
+import ctypes
 import os
 
 import numpy as np
 
-try:
-    import pyassimp as assimp
-    import pyassimp.types as types
-    HAS_ASSIMP = True
-except ImportError:
-    try:
-        import assimp
-        import assimp.types
-        HAS_ASSIMP = True
-    except ImportError:
-        HAS_ASSIMP = False
+_DLL = None
+DLL_PATH = '/usr/lib/x86_64-linux-gnu/libassimp.so.5'
 
 
-def _read_material_names(scene):
-    """Read material names from the aiScene."""
-    if not scene or not scene.materials:
-        return []
-    
-    names = []
-    for mat in scene.materials:
-        if mat and mat.name:
-            names.append(mat.name)
-        else:
-            names.append("material_{}".format(len(names)))
-    return names
+class Vec3(ctypes.Structure):
+    _fields_ = [('x', ctypes.c_float), ('y', ctypes.c_float), ('z', ctypes.c_float)]
+
+Vec3P = ctypes.POINTER(Vec3)
 
 
-def load_fbx(path, flags=None):
-    if not HAS_ASSIMP:
-        raise RuntimeError("pyassimp not available. Install with: pip install pyassimp")
-    
-    scene = assimp.load(path)
-    if not scene:
-        raise RuntimeError('assimp failed to load file')
-    
-    mat_names = _read_material_names(scene)
-    if mat_names:
-        print(f"  FBX materials: {mat_names}")
-    
+def _get_dll():
+    global _DLL
+    if _DLL is None:
+        _DLL = ctypes.CDLL(DLL_PATH)
+    return _DLL
+
+
+def load_fbx(path, flags=8 | 16):
+    dll = _get_dll()
+
+    class Mesh(ctypes.Structure):
+        pass
+    Mesh._fields_ = [
+        ('mPrimitiveTypes', ctypes.c_uint),
+        ('mNumVertices', ctypes.c_uint),
+        ('mNumFaces', ctypes.c_uint),
+        ('_pad0', ctypes.c_uint),
+        ('mVertices', Vec3P),
+        ('mNormals', Vec3P),
+        ('mTangents', Vec3P),
+        ('mBitangents', Vec3P),
+        ('mTextureCoords', Vec3P * 8),
+        ('mNumUVComponents', ctypes.c_uint * 8),
+        ('mFaces', ctypes.c_void_p),
+        ('mNumBones', ctypes.c_uint),
+        ('_pad1', ctypes.c_uint),
+        ('mBones', ctypes.c_void_p),
+        ('mMaterialIndex', ctypes.c_uint),
+    ]
+
+    class Scene(ctypes.Structure):
+        _fields_ = [
+            ('mFlags', ctypes.c_uint), ('_p0', ctypes.c_uint),
+            ('mRootNode', ctypes.c_void_p),
+            ('mNumMeshes', ctypes.c_uint), ('_p1', ctypes.c_uint),
+            ('mMeshes', ctypes.POINTER(ctypes.POINTER(Mesh))),
+            ('mNumMaterials', ctypes.c_uint), ('_p2', ctypes.c_uint),
+            ('mMaterials', ctypes.c_void_p),
+        ]
+
+    dll.aiImportFile.restype = ctypes.POINTER(Scene)
+    dll.aiImportFile.argtypes = [ctypes.c_char_p, ctypes.c_uint]
+    dll.aiReleaseImport.restype = None
+    dll.aiReleaseImport.argtypes = [ctypes.POINTER(Scene)]
+
+    p = dll.aiImportFile(os.path.abspath(path).encode(), flags)
+    if not p:
+        raise RuntimeError('assimp aiImportFile failed')
+    scene = p.contents
+
     meshes = []
-    for mesh in scene.meshes:
-        nv = len(mesh.vertices) // 3
-        
-        verts = np.array(mesh.vertices, dtype=np.float32).reshape(-1, 3)
-        
+    for i in range(scene.mNumMeshes):
+        mesh = scene.mMeshes[i].contents
+        nv = mesh.mNumVertices
+        nf = mesh.mNumFaces
+
+        verts_arr = np.ctypeslib.as_array(mesh.mVertices, (nv,))
+        verts = np.column_stack([verts_arr['x'], verts_arr['y'], verts_arr['z']])
+
         norms = None
-        if mesh.normals and len(mesh.normals) > 0:
-            norms = np.array(mesh.normals, dtype=np.float32).reshape(-1, 3)
+        if mesh.mNormals:
+            n_arr = np.ctypeslib.as_array(mesh.mNormals, (nv,))
+            norms = np.column_stack([n_arr['x'], n_arr['y'], n_arr['z']])
+
+        all_uvs = {}
+        for ch in range(8):
+            if mesh.mTextureCoords[ch]:
+                u_arr = np.ctypeslib.as_array(mesh.mTextureCoords[ch], (nv,))
+                uv_data = np.column_stack([u_arr['x'], u_arr['y']])
+                all_uvs[ch] = uv_data
+
+        primary_uvs = all_uvs.get(0, None)
+
+        indices = np.arange(nv, dtype=np.uint32)
+
+        mat_idx = mesh.mMaterialIndex
         
-        uvs = None
-        if mesh.texturecoords and len(mesh.texturecoords) > 0:
-            uv_data = np.array(mesh.texturecoords[0], dtype=np.float32)
-            if len(uv_data) >= 2:
-                uvs = uv_data.reshape(-1, 2)[:, :2]
-                unique_u = len(np.unique(np.round(uvs[:, 0], 4)))
-                unique_v = len(np.unique(np.round(uvs[:, 1], 4)))
-                print(f"  UV channel 0: {unique_u}x{unique_v} unique, "
-                      f"U=[{uvs[:, 0].min():.4f},{uvs[:, 0].max():.4f}], "
-                      f"V=[{uvs[:, 1].min():.4f},{uvs[:, 1].max():.4f}]")
-        
-        mat_idx = mesh.materialindex
-        mat_label = mat_names[mat_idx] if mat_idx < len(mat_names) else "material_{}".format(mat_idx)
-        
+        # Material name will be resolved by the mod using material_index
+        # The mod should build a mapping from material JSON filenames
+        mat_label = f"material_{mat_idx}"
+
         meshes.append({
             'vertices': verts,
             'normals': norms,
-            'uvs': uvs,
-            'all_uvs': {0: uvs} if uvs is not None else {},
+            'uvs': primary_uvs,
+            'all_uvs': all_uvs,
+            'indices': indices,
             'num_vertices': nv,
-            'num_faces': len(mesh.faces) if hasattr(mesh, 'faces') else nv // 3,
+            'num_faces': nf,
             'material_index': mat_idx,
             'material_name': mat_label,
         })
-    
-    assimp.release()
+
+    dll.aiReleaseImport(p)
     return meshes

@@ -30,14 +30,23 @@ def _load_fbx_loader():
 
 
 def _build_material_texture_map():
-    """Read material JSONs and extract _MainTex name for each material."""
-    mat_map = {}
+    """Read material JSONs and build index-based texture mapping.
+    
+    Returns a dict mapping material_index -> texture_path.
+    Material indices are determined by sorting JSON filenames alphabetically.
+    """
+    mat_map = {}  # index -> texture_path
+    mat_names_ordered = []  # index -> material name
+    
     if not os.path.isdir(MAT_DIR):
-        return mat_map
-    for fname in os.listdir(MAT_DIR):
-        if not fname.endswith('.json'):
-            continue
+        return mat_map, mat_names_ordered
+    
+    # Sort JSON files alphabetically to get consistent ordering
+    json_files = sorted([f for f in os.listdir(MAT_DIR) if f.endswith('.json')])
+    
+    for idx, fname in enumerate(json_files):
         mat_name = fname.replace('.json', '')
+        mat_names_ordered.append(mat_name)
         try:
             with open(os.path.join(MAT_DIR, fname), 'r') as f:
                 data = json.load(f)
@@ -48,12 +57,12 @@ def _build_material_texture_map():
             if tex_name and not is_null:
                 tex_path = os.path.join(TEX_DIR, tex_name + '.png')
                 if os.path.isfile(tex_path):
-                    mat_map[mat_name] = tex_path
+                    mat_map[idx] = tex_path
                 else:
-                    mat_map[mat_name] = tex_path
+                    mat_map[idx] = tex_path
         except Exception:
             pass
-    return mat_map
+    return mat_map, mat_names_ordered
 
 
 class Paimon(PassiveMob):
@@ -90,8 +99,9 @@ class Paimon(PassiveMob):
         )
         import pyglet
 
-        mat_tex_map = _build_material_texture_map()
+        mat_tex_map, mat_names_ordered = _build_material_texture_map()
         print(f"Paimon: material texture map: { {k: os.path.basename(v) for k, v in mat_tex_map.items()} }")
+        print(f"Paimon: material names (by index): {mat_names_ordered}")
 
         try:
             load_fbx = _load_fbx_loader()
@@ -109,10 +119,10 @@ class Paimon(PassiveMob):
             verts = np.ascontiguousarray(mesh['vertices'], dtype=np.float32)
             norms = np.ascontiguousarray(mesh['normals'], dtype=np.float32) if mesh['normals'] is not None else None
             uvs = np.ascontiguousarray(mesh['uvs'], dtype=np.float32) if mesh['uvs'] is not None else None
-            mat_name = mesh.get('material_name', '')
             mat_idx = mesh['material_index']
 
-            tex_file = mat_tex_map.get(mat_name, '')
+            # Look up texture by material index
+            tex_file = mat_tex_map.get(mat_idx, '')
             tex_id = 0
 
             if tex_file and os.path.isfile(tex_file):
@@ -126,10 +136,13 @@ class Paimon(PassiveMob):
                     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
                     tex_id = tex.id
                     self._keep_alive.append((image, tex))
+                    mat_name = mat_names_ordered[mat_idx] if mat_idx < len(mat_names_ordered) else f"material_{mat_idx}"
                     print(f"  mesh[{i}] mat[{mat_idx}] '{mat_name}' -> {os.path.basename(tex_file)} (GL {tex_id})")
                 except Exception as e:
+                    mat_name = mat_names_ordered[mat_idx] if mat_idx < len(mat_names_ordered) else f"material_{mat_idx}"
                     print(f"  mesh[{i}] mat[{mat_idx}] '{mat_name}' texture FAILED: {e}")
             else:
+                mat_name = mat_names_ordered[mat_idx] if mat_idx < len(mat_names_ordered) else f"material_{mat_idx}"
                 print(f"  mesh[{i}] mat[{mat_idx}] '{mat_name}' -> no diffuse texture")
 
             if uvs is not None:

@@ -5,35 +5,36 @@ __pycache__/
 *.pyo
 *.pyd
 
-# Compiled and build artifacts
-*.o
-*.obj
-*.out
-*.so
-*.dll
-*.exe
-
 # Dependencies
 .venv/
 venv/
 env/
-.env
-.env.local
-*.env.*
+pip-log.txt
+pipenv.lock
+requirements.txt.bak
 
-# Logs and temp files
+# Build artifacts
+build/
+dist/
+*.egg-info/
+.sass-cache/
+
+# Logs
 *.log
-*.tmp
-*.swp
 
-# Editors
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Editor files
 .vscode/
 .idea/
-
-# Distribution / packaging
-dist/
-build/
-*.tar.gz
-*.whl
-*.egg-info/
+*.swp
+*.swo
+*~
 ```
