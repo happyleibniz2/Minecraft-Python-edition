@@ -6,6 +6,7 @@ the diffuse texture, producing a flat-colour mosaic that is the correct
 appearance for this model without the proprietary shader.
 """
 import importlib.util
+import json
 import math
 import os
 import random
@@ -17,14 +18,7 @@ ASSETS = os.path.abspath(os.path.join(os.path.dirname(__file__), "assets"))
 MOD_DIR = os.path.dirname(os.path.abspath(__file__))
 FBX_PATH = os.path.join(ASSETS, "Paimon", "Default", "NPC_Kanban_Paimon.fbx")
 TEX_DIR = os.path.join(ASSETS, "Paimon", "Default", "Textures")
-
-MESH_TEXTURE_MAP = {
-    0: "NPC_Kanban_Paimon_Tex_Body_Diffuse.png",
-    1: "NPC_Kanban_Paimon_Tex_Face_Diffuse.png",
-    2: "NPC_Kanban_Paimon_Tex_Cloak_Diffuse.png",
-    3: "NPC_Kanban_Paimon_Tex_Face_Diffuse.png",
-    4: "NPC_Kanban_Paimon_Tex_Hair_Diffuse.png",
-}
+MAT_DIR = os.path.join(ASSETS, "Paimon", "Default", "Materials")
 
 
 def _load_fbx_loader():
@@ -33,6 +27,42 @@ def _load_fbx_loader():
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod.load_fbx
+
+
+def _build_material_texture_map():
+    """Read material JSONs and build index-based texture mapping.
+    
+    Returns a dict mapping material_index -> texture_path.
+    Material indices are determined by sorting JSON filenames alphabetically.
+    """
+    mat_map = {}  # index -> texture_path
+    mat_names_ordered = []  # index -> material name
+    
+    if not os.path.isdir(MAT_DIR):
+        return mat_map, mat_names_ordered
+    
+    # Sort JSON files alphabetically to get consistent ordering
+    json_files = sorted([f for f in os.listdir(MAT_DIR) if f.endswith('.json')])
+    
+    for idx, fname in enumerate(json_files):
+        mat_name = fname.replace('.json', '')
+        mat_names_ordered.append(mat_name)
+        try:
+            with open(os.path.join(MAT_DIR, fname), 'r') as f:
+                data = json.load(f)
+            maintex = data.get('m_SavedProperties', {}).get('m_TexEnvs', {}).get('_MainTex', {})
+            tex_info = maintex.get('m_Texture', {})
+            tex_name = tex_info.get('Name', '')
+            is_null = tex_info.get('IsNull', True)
+            if tex_name and not is_null:
+                tex_path = os.path.join(TEX_DIR, tex_name + '.png')
+                if os.path.isfile(tex_path):
+                    mat_map[idx] = tex_path
+                else:
+                    mat_map[idx] = tex_path
+        except Exception:
+            pass
+    return mat_map, mat_names_ordered
 
 
 class Paimon(PassiveMob):
@@ -62,38 +92,16 @@ class Paimon(PassiveMob):
             glBindTexture, glTexParameteri, glColor4f,
             GL_TEXTURE_MIN_FILTER, GL_TEXTURE_MAG_FILTER,
             GL_TEXTURE_WRAP_S, GL_TEXTURE_WRAP_T,
-            GL_NEAREST, GL_CLAMP_TO_EDGE,
+            GL_LINEAR, GL_CLAMP_TO_EDGE,
             glGenLists, glNewList, glEndList, GL_COMPILE,
             GL_TRIANGLES, glBegin, glEnd,
             glVertex3f, glTexCoord2f, glNormal3f,
         )
         import pyglet
 
-        self._mesh_tex_ids = []
-        for idx in sorted(MESH_TEXTURE_MAP.keys()):
-            tex_name = MESH_TEXTURE_MAP[idx]
-            tex_file = os.path.join(TEX_DIR, tex_name)
-            tex_id = 0
-            if os.path.isfile(tex_file):
-                try:
-                    image = pyglet.image.load(tex_file)
-                    tex = image.get_texture()
-                    glBindTexture(GL_TEXTURE_2D, tex.id)
-                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
-                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
-                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
-                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
-                    tex_id = tex.id
-                    self._keep_alive = getattr(self, '_keep_alive', [])
-                    self._keep_alive.append((image, tex))
-                    print(f"Paimon: mesh[{idx}] texture {tex_name} -> GL {tex_id} ({image.width}x{image.height})")
-                except Exception as e:
-                    print(f"Paimon: mesh[{idx}] texture {tex_name} FAILED: {e}")
-                    import traceback
-                    traceback.print_exc()
-            else:
-                print(f"Paimon: mesh[{idx}] texture not found: {tex_file}")
-            self._mesh_tex_ids.append(tex_id)
+        mat_tex_map, mat_names_ordered = _build_material_texture_map()
+        print(f"Paimon: material texture map: { {k: os.path.basename(v) for k, v in mat_tex_map.items()} }")
+        print(f"Paimon: material names (by index): {mat_names_ordered}")
 
         try:
             load_fbx = _load_fbx_loader()
@@ -105,11 +113,37 @@ class Paimon(PassiveMob):
             traceback.print_exc()
             return
 
+        self._keep_alive = getattr(self, '_keep_alive', [])
+
         for i, mesh in enumerate(self._mesh_data):
             verts = np.ascontiguousarray(mesh['vertices'], dtype=np.float32)
             norms = np.ascontiguousarray(mesh['normals'], dtype=np.float32) if mesh['normals'] is not None else None
             uvs = np.ascontiguousarray(mesh['uvs'], dtype=np.float32) if mesh['uvs'] is not None else None
-            tex_id = self._mesh_tex_ids[i] if i < len(self._mesh_tex_ids) else 0
+            mat_idx = mesh['material_index']
+
+            # Look up texture by material index
+            tex_file = mat_tex_map.get(mat_idx, '')
+            tex_id = 0
+
+            if tex_file and os.path.isfile(tex_file):
+                try:
+                    image = pyglet.image.load(tex_file)
+                    tex = image.get_texture()
+                    glBindTexture(GL_TEXTURE_2D, tex.id)
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
+                    tex_id = tex.id
+                    self._keep_alive.append((image, tex))
+                    mat_name = mat_names_ordered[mat_idx] if mat_idx < len(mat_names_ordered) else f"material_{mat_idx}"
+                    print(f"  mesh[{i}] mat[{mat_idx}] '{mat_name}' -> {os.path.basename(tex_file)} (GL {tex_id})")
+                except Exception as e:
+                    mat_name = mat_names_ordered[mat_idx] if mat_idx < len(mat_names_ordered) else f"material_{mat_idx}"
+                    print(f"  mesh[{i}] mat[{mat_idx}] '{mat_name}' texture FAILED: {e}")
+            else:
+                mat_name = mat_names_ordered[mat_idx] if mat_idx < len(mat_names_ordered) else f"material_{mat_idx}"
+                print(f"  mesh[{i}] mat[{mat_idx}] '{mat_name}' -> no diffuse texture")
 
             if uvs is not None:
                 u_min, u_max = uvs[:, 0].min(), uvs[:, 0].max()
