@@ -110,6 +110,9 @@ float cloudDensity(vec3 world) {
     float top = 1.0 - smoothstep(0.55, 1.0, height);
     float anvil = mix(0.75, 1.15, smoothstep(0.1, 0.75, height));
 
+    // CRITICAL FIX: Add height gradient for volumetric depth (bottom darker, top brighter)
+    float heightGradient = smoothstep(0.0, 0.25, height) * smoothstep(1.0, 0.65, height);
+
     // Animate cloud movement over time
     vec3 samplePosition = vec3(
         (world.x + windOffset.x) * 0.008,
@@ -130,7 +133,8 @@ float cloudDensity(vec3 world) {
     float detail = valueNoise3(samplePosition * 5.0 + vec3(0, gameTime * 0.003, 0));
     density = density * (0.85 + 0.15 * detail);
     
-    return clamp(density * bottom * top, 0.0, 1.0);
+    // Apply height gradient for natural lighting variation
+    return clamp(density * bottom * top * heightGradient, 0.0, 1.0);
 }
 
 void main() {
@@ -153,8 +157,8 @@ void main() {
         discard;
     }
 
-    // Increased steps for smoother cloud rendering
-    const int STEPS = 16;
+    // CRITICAL FIX: Increased steps from 16 to 32 for smoother volumetric rendering
+    const int STEPS = 32;
     float stepLength = (farDistance - nearDistance) / float(STEPS);
     
     // Temporal reprojection for anti-aliasing (reduces itching)
@@ -169,13 +173,11 @@ void main() {
         float density = cloudDensity(position);
         
         if (density > 0.003) {
-            // Self-shadowing: sample towards the sun
-            float towardSun = density;
-            if (stepIndex % 3 == 0) {
-                towardSun = cloudDensity(position + sunDirection * 6.0);
-            }
+            // CRITICAL FIX: Every step samples towards the sun (was only every 3rd step)
+            float towardSun = cloudDensity(position + sunDirection * 4.0);
             
-            float lightTransmission = exp(-towardSun * 2.5);
+            // CRITICAL FIX: Increased light transmission coefficient from 2.5 to 5.0
+            float lightTransmission = exp(-towardSun * 5.0);
             float forwardScatter = pow(max(dot(rayDirection, sunDirection), 0.0), 8.0);
             float silverLining = forwardScatter * lightTransmission * 0.7;
 
@@ -194,7 +196,8 @@ void main() {
             vec3 sampleColor = mix(shadowColor, litColor,
                 clamp(lightTransmission * 0.7 + silverLining, 0.0, 1.0));
 
-            float extinction = density * stepLength * 0.045;
+            // CRITICAL FIX: Increased Beer-Lambert extinction from 0.045 to 0.12
+            float extinction = density * stepLength * 0.12;
             float alpha = 1.0 - exp(-extinction);
             accumulated += sampleColor * alpha * transmittance;
             transmittance *= 1.0 - alpha;
