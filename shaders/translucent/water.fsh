@@ -75,8 +75,10 @@ vec3 calculateSSR(vec3 worldPos, vec3 normal, vec3 viewDir, out float hitDepth) 
         float t = float(i) * stepSize + dither;
         vec3 samplePos = worldPos + reflectDir * t;
         
-        // CRITICAL FIX: Project world position to screen space using projection matrix
-        vec4 clipPos = gbufferProjection * vec4(samplePos - cameraPosition, 1.0);
+        // CRITICAL FIX: First transform to VIEW SPACE, then project to screen space
+        // This ensures correct perspective division and UV coordinates
+        vec4 viewSamplePos4 = viewMatrix * vec4(samplePos, 1.0);
+        vec4 clipPos = gbufferProjection * viewSamplePos4;
         clipPos /= clipPos.w;
         vec2 projectedUV = clipPos.xy * 0.5 + 0.5; // Convert from NDC [-1,1] to [0,1]
         
@@ -90,10 +92,7 @@ vec3 calculateSSR(vec3 worldPos, vec3 normal, vec3 viewDir, out float hitDepth) 
         float sceneDepthNorm = texture(colortex3, projectedUV).r;
         float sceneLinearDepth = sceneDepthNorm * farPlane;
         
-        // CRITICAL FIX: Calculate linear depth of our ray position in VIEW SPACE
-        // Use viewMatrix to transform to view space, then take -Z
-        // NOT projection matrix which gives clip space, not view space
-        vec4 viewSamplePos4 = viewMatrix * vec4(samplePos, 1.0);
+        // Use the view-space Z we already calculated above
         float rayLinearDepth = -viewSamplePos4.z;  // View-space Z is already linear
         
         // Check for intersection with proper depth comparison

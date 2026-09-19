@@ -133,6 +133,9 @@ vec3 calculateVolumetricLight(vec3 worldPos, float depth) {
         float t = float(i) * stepSize + dither * stepSize * 0.5;
         vec3 samplePos = worldPos + lightDir * t;
         
+        // CRITICAL FIX: Accumulate step distance, not just assign current t
+        accumulatedDist += stepSize;
+        
         // Transform sample position to light space for shadow lookup
         // CORRECT: Use shadowMatrix (world → light space), NOT inverse
         vec4 lightSpacePos = shadowMatrix * vec4(samplePos, 1.0);
@@ -146,9 +149,7 @@ vec3 calculateVolumetricLight(vec3 worldPos, float depth) {
             float shadowSample = texture(shadowMap, projected.xy).r;
             float visibility = smoothstep(projected.z - 0.003, projected.z + 0.003, shadowSample);
             
-            // CRITICAL FIX: Use accumulated raymarch distance, NOT Euclidean distance
-            // This correctly accounts for the path length through the medium
-            accumulatedDist = t;  // Distance along the ray from fragment
+            // Use accumulated distance for density calculation along entire ray path
             float density = exp(-accumulatedDist * 0.06) * (1.0 - exp(-accumulatedDist * 0.35));
             
             // Accumulate ONLY direct sun scattering (avoid double-counting skylight)
@@ -174,11 +175,20 @@ void main() {
     // CORRECT: Normalize gl_FragCoord to NDC [-1, 1]
     vec2 ndc = (gl_FragCoord.xy / vec2(viewWidth, viewHeight)) * 2.0 - 1.0;
     
-    // Reconstruct clip space position with proper linear depth
-    // Linear depth is in view space, convert to clip space z
-    vec4 clipPos = vec4(ndc, linearDepth * 2.0 - 1.0, 1.0);
+    // Reconstruct clip space position with proper NDC depth
+    // normalizedDepth is in [0,1], convert to NDC [-1,1] BEFORE multiplying by farPlane
+    float ndcZ = normalizedDepth * 2.0 - 1.0;
+    vec4 clipPos = vec4(ndc, ndcZ, 1.0);
+    
+    // Transform from clip space to view space using inverse projection
     vec4 viewPos = gbufferProjectionInverse * clipPos;
     viewPos /= viewPos.w;
+    
+    // Now viewPos.z is the linear depth in view space
+    // Multiply by farPlane to get actual world distance if needed
+    float linearDepth = -viewPos.z;  // This is now correct linear view-space depth
+    
+    // Transform to world space
     vec3 worldPos = (inverseViewMatrix * vec4(viewPos.xyz, 1.0)).xyz;
     
     // Decode normal from [0,1] back to [-1,1]

@@ -156,9 +156,9 @@ vec3 applyProperBloom(vec2 uv, vec2 texelSize) {
     vec3 upsampled2 = texture(colortex8, uv).rgb;
     accumulatedGlow = bloomLevel1 + upsampled2;
     
-    // Final upsample to FULL resolution and blend with original scene
+    // Final upsample to FULL resolution - ADD to get final accumulated glow
     vec3 upsampled1 = texture(colortex7, uv).rgb;
-    accumulatedGlow = upsampled1;  // Final accumulated glow at full res
+    accumulatedGlow = accumulatedGlow + upsampled1;  // FIX: Accumulate, don't overwrite
 
     // STEP 4: Apply bloom strength and blend with original color
     return accumulatedGlow * bloomStrength;
