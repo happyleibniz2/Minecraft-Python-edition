@@ -39,6 +39,7 @@ def _load_fbx_loader():
     return module.load_fbx
 
 
+<<<<<<< HEAD
 def _fallback_texture_map():
     mapping = {}
     if not os.path.isdir(MAT_DIR):
@@ -72,6 +73,42 @@ def _texture_filename(mesh, mesh_index):
         if material_name.endswith(key):
             return texture
     return ""
+=======
+def _build_material_texture_map():
+    """Read material JSONs and extract _MainTex name for each material.
+    
+    Returns a dict mapping material_index (int) to texture path.
+    Since pyassimp can't read material names from FBX properly, we use material_index
+    to match meshes with materials. Materials are assumed to be loaded by assimp in
+    the same order as they appear in the FBX file, which typically matches alphabetical
+    order of the Unity material asset filenames.
+    """
+    mat_map = {}
+    if not os.path.isdir(MAT_DIR):
+        return mat_map
+    
+    # Get all material JSON files sorted alphabetically
+    mat_files = sorted([f for f in os.listdir(MAT_DIR) if f.endswith('.json')])
+    
+    for idx, fname in enumerate(mat_files):
+        mat_name = fname.replace('.json', '')
+        try:
+            with open(os.path.join(MAT_DIR, fname), 'r') as f:
+                data = json.load(f)
+            maintex = data.get('m_SavedProperties', {}).get('m_TexEnvs', {}).get('_MainTex', {})
+            tex_info = maintex.get('m_Texture', {})
+            tex_name = tex_info.get('Name', '')
+            is_null = tex_info.get('IsNull', True)
+            if tex_name and not is_null:
+                tex_path = os.path.join(TEX_DIR, tex_name + '.png')
+                if os.path.isfile(tex_path):
+                    mat_map[idx] = tex_path  # Use index as key instead of name
+                else:
+                    mat_map[idx] = tex_path
+        except Exception:
+            pass
+    return mat_map
+>>>>>>> 21f9a7d42d7e7076c2c7499aaa45451262efb8a5
 
 
 class Vesna(PassiveMob):
@@ -115,6 +152,7 @@ class Vesna(PassiveMob):
             traceback.print_exc()
             return
 
+<<<<<<< HEAD
         texture_cache = {}
         self._keep_alive = []
         for mesh_index, mesh in enumerate(meshes):
@@ -127,6 +165,35 @@ class Vesna(PassiveMob):
             uvs = mesh.get("all_uvs", {}).get(UV_CHANNEL, mesh["uvs"])
             if uvs is None:
                 uvs = np.zeros((len(vertices), 2), np.float32)
+=======
+        self._keep_alive = getattr(self, '_keep_alive', [])
+
+        for i, mesh in enumerate(self._mesh_data):
+            verts = np.ascontiguousarray(mesh['vertices'], dtype=np.float32)
+            norms = np.ascontiguousarray(mesh['normals'], dtype=np.float32) if mesh['normals'] is not None else None
+            uvs = np.ascontiguousarray(mesh['uvs'], dtype=np.float32) if mesh['uvs'] is not None else None
+            mat_name = mesh.get('material_name', '')
+            mat_idx = mesh['material_index']
+
+            # Use material_index (int) to look up texture path since pyassimp can't read material names
+            tex_file = mat_tex_map.get(mat_idx, '')
+            tex_id = 0
+
+            if tex_file and os.path.isfile(tex_file):
+                try:
+                    image = pyglet.image.load(tex_file)
+                    tex = image.get_texture()
+                    glBindTexture(GL_TEXTURE_2D, tex.id)
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
+                    tex_id = tex.id
+                    self._keep_alive.append((image, tex))
+                    print(f"  mesh[{i}] mat[{mat_idx}] '{mat_name}' -> {os.path.basename(tex_file)} (GL {tex_id})")
+                except Exception as e:
+                    print(f"  mesh[{i}] mat[{mat_idx}] '{mat_name}' texture FAILED: {e}")
+>>>>>>> 21f9a7d42d7e7076c2c7499aaa45451262efb8a5
             else:
                 uvs = np.array(uvs, dtype=np.float32, copy=True)
             if UV_FLIP_V:
