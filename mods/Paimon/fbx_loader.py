@@ -25,7 +25,10 @@ class Face(ctypes.Structure):
 
 
 class AiString(ctypes.Structure):
-    _fields_ = [("length", ctypes.c_size_t),
+    # assimp's aiString is { ai_uint32 mLength; char mData[1024]; }.
+    # The length is 4 bytes; using size_t shifted mData by four bytes and
+    # truncated the first four characters of every material name.
+    _fields_ = [("length", ctypes.c_uint32),
                 ("data", ctypes.c_char * 1024)]
 
 
@@ -57,8 +60,8 @@ def _material_names(dll, scene):
         result = dll.aiGetMaterialString(
             materials[index], b"?mat.name", 0, 0, ctypes.byref(value))
         if result == 0 and value.length:
-            names.append(value.data[:value.length].decode(
-                "utf-8", errors="replace"))
+            name = value.data[:value.length].decode("utf-8", errors="replace")
+            names.append(name.split("\x00")[0] or f"material_{index}")
         else:
             names.append(f"material_{index}")
     return names
@@ -73,7 +76,10 @@ def load_fbx(path, flags=(AI_PROCESS_TRIANGULATE |
     """
     dll = _get_dll()
 
-    # Empirically verified for assimp-vc143-mt.dll on Windows x64.
+    # Assimp 5.2.5 aiMesh on Windows x64. mColors[8] is present before
+    # mTextureCoords even when the imported mesh does not contain colours.
+    # Omitting it shifts mFaces from its real offset (208) to 144 and turns
+    # valid indexed meshes into a NULL pointer access.
     class Mesh(ctypes.Structure):
         _fields_ = [
             ("mPrimitiveTypes", ctypes.c_uint),       # 0
@@ -84,13 +90,14 @@ def load_fbx(path, flags=(AI_PROCESS_TRIANGULATE |
             ("mNormals", Vec3P),                      # 24
             ("mTangents", Vec3P),                     # 32
             ("mBitangents", Vec3P),                   # 40
-            ("mTextureCoords", Vec3P * 8),            # 48
-            ("mNumUVComponents", ctypes.c_uint * 8),  # 112
-            ("mFaces", FaceP),                        # 144
-            ("mNumBones", ctypes.c_uint),             # 152
-            ("_pad1", ctypes.c_uint),                 # 156
-            ("mBones", ctypes.c_void_p),              # 160
-            ("mMaterialIndex", ctypes.c_uint),        # 168
+            ("mColors", ctypes.c_void_p * 8),          # 48
+            ("mTextureCoords", Vec3P * 8),            # 112
+            ("mNumUVComponents", ctypes.c_uint * 8),  # 176
+            ("mFaces", FaceP),                        # 208
+            ("mNumBones", ctypes.c_uint),             # 216
+            ("_pad1", ctypes.c_uint),                 # 220
+            ("mBones", ctypes.c_void_p),              # 224
+            ("mMaterialIndex", ctypes.c_uint),        # 232
         ]
 
     class Scene(ctypes.Structure):
@@ -142,6 +149,9 @@ def load_fbx(path, flags=(AI_PROCESS_TRIANGULATE |
                             np.float32, copy=True)
 
             face_indices = []
+            if mesh.mNumFaces and not mesh.mFaces:
+                raise RuntimeError(
+                    f"Mesh {mesh_index} has {mesh.mNumFaces} faces but no face pointer")
             for face_index in range(mesh.mNumFaces):
                 face = mesh.mFaces[face_index]
                 if face.mNumIndices != 3:

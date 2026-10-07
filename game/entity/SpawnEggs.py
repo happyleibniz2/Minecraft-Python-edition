@@ -14,11 +14,16 @@ import os
 import pyglet
 from OpenGL.GL import *
 
+from functions import realize_icon
+
 # entity id -> (primary colour, secondary colour), from Minecraft
 SPAWN_EGGS = {
     "cow": (0x443626, 0xA1A1A1),
     "sheep": (0xE7E7E7, 0xFFB5B5),
     "zombie": (0x00AFAF, 0x799C65),
+    "pig": (0xF0A5A2, 0xDB635F),
+    "creeper": (0x0DA70B, 0x000000),
+    "chicken": (0xA1A1A1, 0xFF0000),
 }
 
 BASE_TEXTURE = os.path.join("textures", "items", "spawn_egg.png")
@@ -106,9 +111,7 @@ def configure_spawn_eggs(scene):
         scene.texture[name] = pyglet.graphics.TextureGroup(texture)
 
         icon = pyglet.image.ImageData(width, height, "RGBA", pixels, pitch=-width * 4)
-        icon.width = 22
-        icon.height = 22
-        scene.inventory_textures[name] = icon
+        scene.inventory_textures[name] = realize_icon(icon, 22, 22)
         created[name] = entity_id
 
     scene.spawn_egg_items = created

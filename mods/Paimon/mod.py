@@ -18,10 +18,10 @@ TEX_DIR = os.path.join(ASSETS, "Paimon", "Default", "Textures")
 MOD_JSON = os.path.join(MOD_DIR, "mod.json")
 FALLBACK_TEXTURES = {
     0: "NPC_Kanban_Paimon_Tex_Body_Diffuse.png",
-    1: "NPC_Kanban_Paimon_Tex_Face_Diffuse.png",
+    1: "NPC_Kanban_Paimon_Tex_Hair_Diffuse.png",
     2: "NPC_Kanban_Paimon_Tex_Cloak_Diffuse.png",
     3: "NPC_Kanban_Paimon_Tex_Face_Diffuse.png",
-    4: "NPC_Kanban_Paimon_Tex_Hair_Diffuse.png",
+    4: "NPC_Kanban_Paimon_Tex_Face_Diffuse.png",
 }
 
 

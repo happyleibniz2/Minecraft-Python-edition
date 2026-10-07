@@ -7,9 +7,49 @@ import numpy as np
 from game.Frustum import Frustum
 from game.Scene import Scene
 from game.blocks.CubeHandler import CubeHandler
+from game.Lighting.Light import Light
 
 
 class RenderVisibilityTests(unittest.TestCase):
+    def test_shadow_updates_slow_down_as_shadow_resolution_increases(self):
+        self.assertEqual(Light.SHADOW_UPDATE_RATES[512], 4.0)
+        self.assertEqual(Light.SHADOW_UPDATE_RATES[1024], 3.0)
+        self.assertEqual(Light.SHADOW_UPDATE_RATES[2048], 2.0)
+
+    def test_generated_batch_marks_each_section_once(self):
+        handler = CubeHandler.__new__(CubeHandler)
+        handler.RENDER_CHUNK_SIZE = (16, 8, 16)
+        handler.cubes = {}
+        handler.collidable = {}
+        handler.fluids = {}
+        handler.render_chunks = {}
+        handler.block = {"stone": object(), "water": object()}
+        handler.alpha_textures = ()
+
+        created = {}
+
+        def get_chunk(key):
+            chunk = created.get(key)
+            if chunk is None:
+                chunk = SimpleNamespace(cubes={}, mark_dirty=mock.Mock())
+                created[key] = chunk
+                handler.render_chunks[key] = chunk
+            return chunk
+
+        handler._get_or_create_chunk = get_chunk
+        added = handler.add_generated_batch([
+            ((1, 1, 1), "stone"),
+            ((2, 1, 1), "stone"),
+            ((3, 1, 1), "water"),
+        ])
+
+        chunk = created[(0, 0, 0)]
+        self.assertEqual(added, 3)
+        self.assertEqual(len(chunk.cubes), 3)
+        self.assertEqual(chunk.mark_dirty.call_count, 1)
+        self.assertIn((1, 1, 1), handler.collidable)
+        self.assertTrue(handler.fluids[(3, 1, 1)].source)
+
     def test_frustum_keeps_aabb_inside_boundary_margin(self):
         frustum = Frustum()
         frustum.planes = np.array([

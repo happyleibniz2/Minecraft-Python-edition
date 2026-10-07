@@ -4,11 +4,11 @@
   "dependencies": [],
   "entry": "mod.py",
   "texture_map": {
-    "mesh:0": "NPC_Kanban_Paimon_Tex_Body_Diffuse.png",
-    "mesh:1": "NPC_Kanban_Paimon_Tex_Face_Diffuse.png",
-    "mesh:2": "NPC_Kanban_Paimon_Tex_Cloak_Diffuse.png",
-    "mesh:3": "NPC_Kanban_Paimon_Tex_Face_Diffuse.png",
-    "mesh:4": "NPC_Kanban_Paimon_Tex_Hair_Diffuse.png"
+    "NPC_Kanban_Paimon_Mat_Body": "NPC_Kanban_Paimon_Tex_Body_Diffuse.png",
+    "NPC_Kanban_Paimon_Mat_Hair": "NPC_Kanban_Paimon_Tex_Hair_Diffuse.png",
+    "NPC_Kanban_Paimon_Mat_Cloak": "NPC_Kanban_Paimon_Tex_Cloak_Diffuse.png",
+    "NPC_Kanban_Paimon_Mat_Face": "NPC_Kanban_Paimon_Tex_Face_Diffuse.png",
+    "miHoYoDiffuse": "NPC_Kanban_Paimon_Tex_Face_Diffuse.png"
   },
   "uv_channel": 0,
   "uv_flip_v": false,

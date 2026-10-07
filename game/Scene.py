@@ -7,10 +7,13 @@ from pyglet.gl import *
 from OpenGL.GL import *
 from functions import *
 from game.Lighting.Light import Light
+from game.Lighting.SkyShader import SkyShader
 from game.Particles import Particles
 from game.blocks.DestroyBlock import DestroyBlock
 from game.blocks.droppedBlock import droppedBlock
 from game.entity.Inventory import Inventory
+from game.entity.PlayerAvatar import PlayerAvatar
+from game.entity.VisibilityWorker import VisibilityWorker
 from game.world.Clouds import Clouds
 from game.world.DayNightCycle import DayNightCycle
 from game.world.worldGenerator import worldGenerator
@@ -61,6 +64,15 @@ class Scene:
         previous_light = getattr(self, "light", None)
         if previous_light is not None:
             previous_light.close()
+        previous_sky_shader = getattr(self, "sky_shader", None)
+        if previous_sky_shader is not None:
+            previous_sky_shader.close()
+        previous_clouds = getattr(self, "clouds", None)
+        if previous_clouds is not None:
+            previous_clouds.close()
+        previous_worker = getattr(self, "_vis_worker", None)
+        if previous_worker is not None:
+            previous_worker.close()
         self.entity.clear()
         self._entity_occlusion.clear()
         self._occlusion_cursor = 0
@@ -78,18 +90,33 @@ class Scene:
         self._sky_t_values = ()
         self._star_vertex_list = None
         self._galaxy_vertex_list = None
+        # Colour uploads are cached until the driving colour actually
+        # changes; rebuilding the tuples every frame was pure Python churn.
+        self._sky_color_key = None
+        self._star_color_key = None
+        self._galaxy_color_key = None
 
         self.clouds = Clouds(self)
+        self.clouds.set_quality(game_settings.CLOUD_QUALITY)
         self.droppedBlock = droppedBlock(self)
         self.worldGen = worldGenerator(self, randint(434, 434343454))
         self.particles = Particles(self)
         self.destroy = DestroyBlock(self)
+        self.playerAvatar = PlayerAvatar(self)
         self.light = Light(self)
         self.dayNight = DayNightCycle()
+        self.sky_shader = SkyShader(self.light)
+        self.sky_shader.day_night = self.dayNight
 
         self.drawCounter = 0
         self.genTime = 1
         self.startPlayerPos = [0, -9000, 0]
+
+        # Asynchronous line-of-sight visibility: entities are path-traced on
+        # a background core so the render thread never blocks on occlusion.
+        self._vis_worker = VisibilityWorker(self)
+        self._vis_worker.start()
+        self._vis_tick = 0
 
     def loadPanoramaTextures(self):
         print("Loading panorama textures...")
@@ -166,6 +193,8 @@ class Scene:
             self
         )
         self.light.initialize()
+        self.sky_shader.initialize()
+        self.sky_shader.set_quality(game_settings.BLACKHOLE_QUALITY)
 
         self.set3d()
 
@@ -286,8 +315,7 @@ class Scene:
         self.clouds.update(dt)
         self.droppedBlock.update(dt)
 
-        for i in self.entity[:]:
-            i.update(dt)
+        self.update_entities(dt)
 
         if self.mod_loader is not None:
             self.mod_loader.post("client_tick", scene=self, dt=dt)
@@ -323,7 +351,8 @@ class Scene:
         self.player.updateView()
 
         self.drawAtmosphereSky()
-        self.drawCelestialSky()
+        self.drawCelestialSky(dt)
+        self.drawBlackHoleSky(dt)
         self.clouds.render(self.player, self.dayNight)
         self.renderShadowMap()
         self.light.begin_render()
@@ -332,6 +361,11 @@ class Scene:
 
             for entity in self._visible_entities():
                 entity.render(dt)
+
+            # third-person avatar: the player looks at themselves
+            if (self.player.cameraType != 1 and not self.player.is_spectator
+                    and not self.player.playerDead):
+                self.playerAvatar.render(dt)
 
             self.cubes.render_water()
             self.particles.drawParticles(dt)
@@ -440,7 +474,7 @@ class Scene:
             ('c4f/dynamic', tuple(galaxy_cs)),
         )
 
-    def drawCelestialSky(self):
+    def drawCelestialSky(self, dt=0.0):
         """Draw the moving sun, moon and night stars behind the world."""
         px, py, pz = self.player.position
         radius = 80
@@ -458,17 +492,25 @@ class Scene:
                 self._ensure_star_geometry()
                 brightness = self.dayNight.star_brightness
                 star_count = len(self.dayNight.stars)
-                self._star_vertex_list.colors = tuple([brightness] * (star_count * 4))
+                # Rebuild the star/galaxy colour tuples only when the
+                # brightness bucket changes, not every frame.
+                star_key = round(brightness, 3)
+                if star_key != self._star_color_key:
+                    self._star_vertex_list.colors = tuple([brightness] * (star_count * 4))
+                    self._star_color_key = star_key
                 glPointSize(1.6)
                 glPushMatrix()
                 glTranslatef(px, py, pz)
                 self._star_vertex_list.draw(GL_POINTS)
 
-                galaxy_colors = []
-                for _, _, _, intensity, blue in self.dayNight.galaxy_stars:
-                    a = brightness * intensity
-                    galaxy_colors.extend((a * 0.72, a * 0.78, a * blue, a))
-                self._galaxy_vertex_list.colors = tuple(galaxy_colors)
+                galaxy_key = star_key
+                if galaxy_key != self._galaxy_color_key:
+                    galaxy_colors = []
+                    for _, _, _, intensity, blue in self.dayNight.galaxy_stars:
+                        a = brightness * intensity
+                        galaxy_colors.extend((a * 0.72, a * 0.78, a * blue, a))
+                    self._galaxy_vertex_list.colors = tuple(galaxy_colors)
+                    self._galaxy_color_key = galaxy_key
                 glPointSize(1.2)
                 self._galaxy_vertex_list.draw(GL_POINTS)
                 glPopMatrix()
@@ -496,23 +538,49 @@ class Scene:
             glDepthMask(GL_TRUE)
             glPopAttrib()
 
+    def drawBlackHoleSky(self, dt=0.0):
+        """Render the night sky with a physically-inspired black hole.
+
+        The GLSL shader draws a fullscreen pass behind the world whenever the
+        sky is dark enough for stars to be visible. It renders gravitational
+        lensing of background stars, an accretion disk, and a dark event
+        horizon region. When the shader is unavailable or the sky is bright
+        the existing fixed-function star/moon rendering is used instead.
+        """
+        if self.dayNight.star_brightness <= 0.01:
+            return
+        try:
+            self.sky_shader.render(self, dt)
+        except Exception as error:
+            logging.warning("black hole sky shader failed: %s", error)
+
+    @staticmethod
+    def _build_sky_colors(horizon, zenith, t_values):
+        """Interpolated dome vertex colours (pure, so it can be cached/tested)."""
+        hr, hg, hb = horizon
+        dr, dg, db = zenith[0] - hr, zenith[1] - hg, zenith[2] - hb
+        return tuple(
+            component
+            for t in t_values
+            for component in (hr + dr * t, hg + dg * t, hb + db * t)
+        )
+
     def drawAtmosphereSky(self):
         """Draw a smooth horizon-to-zenith atmospheric gradient dome.
 
-        The geometry is precomputed once into a static vertex list; only the
-        vertex colors change per frame, which removes ~800 immediate-mode
-        vertices from the per-frame path.
+        The geometry is precomputed once into a static vertex list and the
+        vertex colours are only re-uploaded when the day/night colours
+        change; the old path rebuilt ~2400 floats in Python every frame.
         """
         self._ensure_sky_geometry()
         horizon = self.dayNight.horizon_color
         zenith = self.dayNight.zenith_color
-        hr, hg, hb = horizon
-        dr, dg, db = zenith[0] - hr, zenith[1] - hg, zenith[2] - hb
-        self._sky_vertex_list.colors = tuple(
-            component
-            for t in self._sky_t_values
-            for component in (hr + dr * t, hg + dg * t, hb + db * t)
-        )
+        key = (round(horizon[0], 3), round(horizon[1], 3), round(horizon[2], 3),
+               round(zenith[0], 3), round(zenith[1], 3), round(zenith[2], 3))
+        if key != self._sky_color_key:
+            self._sky_vertex_list.colors = Scene._build_sky_colors(
+                horizon, zenith, self._sky_t_values)
+            self._sky_color_key = key
 
         px, py, pz = self.player.position
         glPushAttrib(GL_ENABLE_BIT | GL_DEPTH_BUFFER_BIT | GL_CURRENT_BIT)
@@ -683,11 +751,15 @@ class Scene:
 
     def entity_types(self):
         """All spawnable entity types, keyed by entity id."""
+        from game.entity.Chicken import Chicken
         from game.entity.Cow import Cow
+        from game.entity.Creeper import Creeper
+        from game.entity.Pig import Pig
         from game.entity.Sheep import Sheep
         from game.entity.Zombie import Zombie
 
-        entities = {"cow": Cow, "sheep": Sheep, "zombie": Zombie}
+        entities = {"chicken": Chicken, "cow": Cow, "creeper": Creeper,
+                    "pig": Pig, "sheep": Sheep, "zombie": Zombie}
         entities.update(self.mod_entity_types)
         return entities
 
@@ -718,6 +790,33 @@ class Scene:
             return True
         return False
 
+    # Entity activity tiers by horizontal distance from the player: inside
+    # the simulation range mobs run their full AI/physics; beyond it they
+    # freeze (saving the per-frame Python cost); past the despawn radius
+    # they are removed, which is what lets distant crowds stop costing
+    # frames entirely.
+    ENTITY_SIMULATION_DISTANCE = 64.0
+    ENTITY_DESPAWN_DISTANCE = 128.0
+
+    def update_entities(self, dt):
+        """Distance-tiered entity ticking: update, freeze or despawn."""
+        px = self.player.position[0]
+        pz = self.player.position[2]
+        simulation_squared = self.ENTITY_SIMULATION_DISTANCE ** 2
+        despawn_squared = self.ENTITY_DESPAWN_DISTANCE ** 2
+        for entity in self.entity[:]:
+            if getattr(entity, "is_dead", False):
+                continue
+            dx = entity.position[0] - px
+            dz = entity.position[2] - pz
+            distance_squared = dx * dx + dz * dz
+            if distance_squared > despawn_squared:
+                entity.die()  # removes itself from self.entity
+            elif distance_squared <= simulation_squared:
+                entity.update(dt)
+            # else: frozen beyond the simulation range; it still renders
+            # within the view distance but costs no per-frame AI work
+
     def _visible_entities(self):
         max_distance_squared = CHUNKS_RENDER_DISTANCE * CHUNKS_RENDER_DISTANCE
         candidates = []
@@ -745,17 +844,44 @@ class Scene:
             self._occlusion_cursor = 0
             return []
 
+        camera = (
+            self.player.position[0],
+            self.player.position[1] - self.player.shift - self.player.cameraShake[0],
+            self.player.position[2],
+        )
+
+        # --- asynchronous path-traced visibility -------------------------
+        # Hand the current view to the background worker and consume its
+        # previous result when the camera has barely moved: the render
+        # thread then does no occlusion work at all.
+        worker = getattr(self, "_vis_worker", None)
+        if worker is not None and worker.is_alive():
+            items = [(id(entity), bounds) for entity, bounds in candidates
+                     if bounds is not None]
+            if worker.submit(self._vis_tick, camera, items):
+                self._vis_tick += 1
+            probed_camera = worker.results_camera
+            if probed_camera is not None:
+                moved_squared = sum(
+                    (camera[index] - probed_camera[index]) ** 2
+                    for index in range(3))
+                if moved_squared <= 4.0:
+                    hidden = worker.results
+                    visible = [
+                        entity for entity, bounds in candidates
+                        if bounds is None or id(entity) not in hidden
+                    ]
+                    self._entity_occlusion.clear()
+                    self._occlusion_cursor = 0
+                    return visible
+
+        # --- synchronous fallback (the pre-worker behaviour) ---------------
         check_count = min(4, len(candidates))
         scheduled = {
             (self._occlusion_cursor + offset) % len(candidates)
             for offset in range(check_count)
         }
         self._occlusion_cursor = (self._occlusion_cursor + check_count) % len(candidates)
-        camera = (
-            self.player.position[0],
-            self.player.position[1] - self.player.shift - self.player.cameraShake[0],
-            self.player.position[2],
-        )
         now = self.light.elapsed
         visible = []
         for index, (entity, bounds) in enumerate(candidates):

@@ -77,7 +77,8 @@ Minecraft-Python-edition/
 │   │   ├── GUI.py              # GUI 管理器
 │   │   ├── Button.py, Sliderbox.py, Editarea.py, ModalWindow.py
 │   ├── Lighting/               # 光照系统
-│   │   └── Light.py
+│   │   ├── Light.py            # 平滑光照主 shader（GLSL 1.20）
+│   │   └── SkyShader.py        # 夜空黑洞 shader（引力透镜 + 吸积盘 + 事件视界）
 │   ├── sound/                  # 声音系统
 │   │   ├── Sound.py, BlockSound.py, SoundPhysics.py
 │   └── Mod/forge/              # Mod 加载器
@@ -185,6 +186,13 @@ class MyEntity(PassiveMob):
 
 **⚠️ assimp DLL 必须在根目录，且 Windows 需先 `os.add_dll_directory()`**
 
+**⚠️ ctypes 结构布局（assimp 5.2.5 x64，两次踩坑后验证）**：
+- `aiMesh` 在 `mBitangents` 之后有 `mColors[8]`（即使模型无顶点色也占位）——漏掉会把 `mFaces` 从真实偏移 208 错读到 144，表现为 `ValueError: NULL pointer access`
+- `aiString.mLength` 是 **4 字节 `ai_uint32`**，不是 `c_size_t`——用 8 字节会把 `mData` 后移 4 字节，每个材质名截掉前 4 个字符（`Avatar_...` 变 `ar_...`），导致材质名匹配全部失败
+- 两个 mod 的 `fbx_loader.py` 必须保持一致；材质名靠 `aiGetMaterialString` 读取
+
+**⚠️ 材质→纹理映射**：`mod.json` 的 `texture_map` 以**完整材质名**为 key（Paimon: `NPC_Kanban_Paimon_Mat_Body` 等；Vesna: `Avatar_Girl_Sword_Vesna_Mat_Hair` 等）。Vesna 的 `Avatar_Default_Mat` 在源材质 JSON 中无 `_MainTex`，故意留空不映射
+
 ### 5.4 Shader 系统 (`shaders/`)
 
 - BSL 风格延迟渲染管线：`shadow → shadow_composite → prepare → gbuffers → deferred → translucent → composite → final`
@@ -196,6 +204,43 @@ class MyEntity(PassiveMob):
 - GLSL 版本兼容（项目未显式声明版本，默认兼容模式）
 - 不要破坏 Ping-Pong 缓冲的读写顺序
 
+### 5.5 夜空黑洞 shader (`game/Lighting/SkyShader.py`)
+
+- GLSL 1.20 全屏 pass，在 `Scene.draw()` 中 `drawAtmosphereSky()` 和 `drawCelestialSky()` 之后、云渲染之前执行
+- **世界锚定**：Python 端每帧传相机基向量（`cameraForward/Right/Up`，来自 `player.rotation`，与 `Clouds` 相同的公式）、`tanHalfFov`、黑洞天球方向 `blackHoleDirection`（反太阳点 `(0, -sin a, cos a)`，午夜在天顶）；fragment 从 NDC 重建真实视线方向——转动视角时黑洞像星空一样在天球上移动，不再粘屏
+- **视觉目标是《星际穿越》的卡冈图雅（Gargantua）**：
+  - 薄亮吸积盘近乎侧视（`DISK_NORMAL = (0.989, 0.148, 0)`，全世界固定，倾角约 8.5°）；温度配色 `r^-3/4`，亮度 `r^-2`，多普勒近侧增亮偏蓝
+  - 近/远侧由 `side = a2·dot(diskNormal, bhDir)` 物理判定：近侧盘亮线穿过事件视界前半部，远侧被吸收
+  - 远侧盘面引力包裹成上弧（`LAMBDA_OVER=0.42`，亮）与下弧（`LAMBDA_UNDER=0.26`，暗，仅 HIGH）
+  - 光子环 `rho≈1` 高斯细线；捕获区 `smoothstep(0.985,1.0,rho)` 纯黑
+  - 星场用切平面的精确点质量（Einstein）透镜 `beta = theta·(1 - thetaE²/|theta|²)`，`rho=1` 处放大率发散成爱因斯坦环；星源按**方向**经八面体映射采样（`skyUv`），星 glued 到天球
+- 坐标约定：`rho = |ray 在天空平面的分量| / shadowSin`（`shadowSin = sin(14°)` 阴影角半径），`rho=1` 即捕获边界
+- **质量分级 `settings.BLACKHOLE_QUALITY`**（`OFF`/`LOW`/`HIGH`，shader 设置菜单循环切换，`gui/options.json` 持久化）：OFF 跳过整个 pass（回落原版星点）；LOW 无星场透镜 + 仅上弧；HIGH 全部
+- 只在 `star_brightness > 0.01` 时激活，白天保留固定管线太阳/月亮纹理
+- 初始化时机：`Scene.resetScene()` 只做构造；编译在 GL context 就绪后 `self.light.initialize()` 旁，随后 `set_quality(game_settings.BLACKHOLE_QUALITY)`
+- 资源释放：`resetScene()` 会 `close()` 上一个实例的 GL 程序
+- 无 GL context 时优雅降级（`tests/test_sky_shader.py` 覆盖 11 个无 GL 路径）
+
+### 5.6 体积云 (`game/world/Clouds.py`)
+
+- GLSL 1.20 全屏 raymarch pass（`Scene.draw()` 中天空之后）；`volume_shader` 编译失败或 shader 关闭时回落经典 billboard 云团
+- **密度场**：FBM 基形 + Worley 细胞结构混合；`uDetail≥1` 用高频 Worley 沿边缘侵蚀（`1-density` 加权 → 厚核不散、边缘成絮）
+- **光照（UE 风格近似）**：向阳光的 Beer-Lambert 二次行进自遮蔽（`uSunSamples` 次采样，光深>2 早停）；双瓣 Henyey-Greenstein 相位（前向强散射 + 向后弱瓣，`hgPhase` 分母有 epsilon 保护）；Powder 项防"棉花球"扁平化；`skyColor` 环境项近似一拍多重散射
+- **采样纪律**：IGN（interleaved-gradient-noise）抖动把条带变成高频噪声；自适应步进（空旷处步长 ×3）；透射率 <0.02 早停
+- **质量分级 `settings.CLOUD_QUALITY`**（POTATO/LOW/MEDIUM/HIGH/GPU，`Clouds.QUALITY_PARAMS` 表驱动）：POTATO 完全跳过 raymarch；GPU = 32 步 + 8 阳光采样 + 全部特性。菜单中 GPU 显示为红色 `I PAID FOR THE WHOLE GPU!`
+- quality 通过 uniform 驱动（`uSteps/uSunSamples/uDetail/uPowder/uAdaptive/uDualLobe`），**无需重编译**；`Scene.resetScene()` 重建后 `set_quality(game_settings.CLOUD_QUALITY)` 应用
+- **半分辨率渲染（UE 标准优化）**：LOW/MEDIUM/HIGH 在 `(W/2, H/2)` FBO 中 raymarch，LINEAR 上采样合成到天空（`resolution_scale=0.5`）；GPU 档全分辨率。FBO 按需重建（窗口 resize 检测尺寸变化），`close()` 释放；FBO 不完整时自动回落直渲
+- 暂未实现的时间重投影：需要运动向量 + 历史缓冲基建，当前由"半分辨率 × 采样分级"承担性能伸缩
+
+### 5.7 性能管线（>120 FPS 目标）
+
+- **`settings.VSYNC`**（默认 **OFF**）：`create_opengl_display` 按 `vsync=1 if VSYNC else 0` 建窗——vsync 会把帧率硬锁在显示器刷新率，高帧率目标必须关。菜单切换标记 (restart)，SDL 仅在建窗时应用
+- **MSAA 按设置创建**：`ANTI_ALIASING=False` 时 context 请求 0 samples（原来恒 4x，白白吃填充率）
+- **窗口标题 4 Hz 节流**：`set_caption` + f-string 原来每帧执行
+- **天空/星点颜色上传缓存**：`Scene.drawAtmosphereSky`（~2400 floats）、`_star/galaxy_vertex_list.colors`（~720/1680 floats）原来每帧重建 tuple；现按量化键（颜色 3 位小数）缓存，只在昼夜颜色变化时重建
+- **阴影 pass 正交视锥裁剪**：`CubeHandler.shadow_frustum`（独立 `Frustum` 实例，不污染主视锥）在 `render_shadow` 内对 chunk AABB 精确裁剪——太阳正交盒只覆盖玩家周围 ~48 格，原来按 96 半径距离画全部 chunk
+- 帧预算参考：120 FPS = 8.3 ms/帧；云 pass（半分辨率 MEDIUM 16 步）+ 世界批渲染 + 2 Hz 阴影 + Python 主循环为三大头
+
 ---
 
 ## 6. 当前开发焦点（Genshin 分支）
@@ -203,20 +248,44 @@ class MyEntity(PassiveMob):
 ### 已完成
 - [x] Vesna 和 Paimon 的 FBX 几何体加载
 - [x] 材质索引和材质名读取
-- [x] 纹理绑定（有轻微错位，待修复）
-- [x] 实体生成和位置放置
+- [x] 面索引修复 — 从 `mFaces` 读取真实索引（`mFaces@208`），不再用 `np.arange(nv)`
+- [x] 统一两个 mod 的纹理映射 — `mod.json` 的 `texture_map` / `uv_channel` / `uv_flip_v` 配置驱动
+- [x] 材质名匹配修复 — `aiString.mLength` 用 4 字节 `ai_uint32`；`texture_map` 以完整材质名为 key（Paimon 5 项 / Vesna 12 项），`tests/test_mod_models.py` 验证每个 mesh 都解析到真实存在的纹理
+- [x] Vesna 合并冲突解决 — `fbx_loader.py` / `mod.py` 保留 ctypes + VBO 渲染版本
+- [x] 世界生成批量提交 — `CubeHandler.add_generated_batch()` + `genChunk()` 批量出队，减少脏 section 重标记
+- [x] 夜空黑洞 GLSL shader — `game/Lighting/SkyShader.py`，集成进 `Scene.draw()`（待 runtime 视觉验证）
+- [x] 聊天框 — `game/GUI/Chat.py`，T 键打开（"/" 键预填斜杠），Enter 发送、Esc 取消；打字时屏蔽移动/鼠标输入
+- [x] 命令系统 — `/help`、`/gamemode <creative|survival|spectator>`（creative 免伤）、`/day set <day|night|midnight|0-24000>`、`/clear`、`/exit`
+- [x] 黑洞世界锚定 — 相机基向量 + 反太阳点天球方向，转动视角时黑洞随天球移动；星场经八面体映射 glued 到天上
+- [x] `settings.BLACKHOLE_QUALITY`（OFF/LOW/HIGH）+ `settings.CLOUD_QUALITY`（POTATO/LOW/MEDIUM/HIGH/GPU），shader 设置菜单循环切换、红色 GPU 档标签
+- [x] 体积云重写 — UE 风格：Powder、HG 双瓣、阳光二次行进自遮蔽、边缘侵蚀、IGN 抖动、自适应步进（`game/world/Clouds.py`）
+- [x] Pig/Chicken/Creeper 被动生物 + 官方蛋色生成蛋 + 注册进 `Scene.entity_types()`
+- [x] `PlayerAvatar`（`game/entity/PlayerAvatar.py`，wide steve 64×64 皮肤）支持的第三人称视图；`Player.updateView` 实现了真正的相机后拉/镜像前视
+- [x] F3 切换第三人称（此前是调试面板），`Ctrl+F3` 继承原调试信息切换
+- [x] **键位回归香草**：F3 = 调试覆盖层（F3+B 保留 hitboxes），F5 = 相机循环 1/2/3
+- [x] 第三人称相机修复 — 拉回平移必须在**最外层**（`glTranslatef(0,0,-back)` 先于 `glRotatef` 调用）；此前相机在玩家前方、玩家落在视锥背后（"玩家全黑"根因），矩阵数值验证 4 用例
+- [x] 黑洞吸积盘水平化 — disk 帧由 `cameraUp` 投影构建（视觉水平带 + 上/下包裹弧，Interstellar 构图），倾角固定 0.14；`diskNormal` uniform 移除
+- [x] 异步视线可见性 — `game/entity/VisibilityWorker.py` 后台线程做 LOS"路径追踪"，两拍滞回防闪烁；渲染线程零阻塞（结果相机 2 格内有效，超界回落原同步探测）
+- [x] 手执动态光源 — `Player.update_hand_light()`：手持火把随身照明，切换物品/死亡/关设置即时熄灭；`settings.DYNAMIC_LIGHTING` 菜单实时门控（shader uniform 已有）
+- [x] 创意库存 — `game/entity/CreativeInventory.py`：`tab_items.png` 195×136 region ×2，9×5 调色板（左键整组/右键单个）+ 底部热栏（复用生存槽机制），滚轮翻页，E 键按 `is_creative` 分叉
+- [x] gamemode/战斗一致性审计修复（`tests/test_gamemode_combat.py` 锁定）：
+  - **幽灵窗口锁死** — 开着任何模态窗口时死亡（创造模式虚空伤害绕过免伤 / 生存开背包被僵尸打死），死亡屏期间 `updateScene` 停跑、窗口 ESC 永远收不到 → 重生后窗口重新锁死 `allowEvents`（无法移动/攻击/破坏）。`death_screen()` 现在强制销毁两个窗口
+  - **P 键混合态** — 遗留 P 键只翻 `is_spectator` 不清 `is_creative`，产生 `creative+spectator` 混合（spectator 挡 `attackEntity` → "创造模式打不了怪"）。P 进入旁观时现在会清 `is_creative`
+  - **确认无 bug**：`attackEntity` 无 creative 门控（香草创造可攻击），creative→survival 切换本身不影响造成伤害（用户报的症状来自上述两个锁死，非切换逻辑）
+- [x] 创意库存滚轮翻页修复 — 翻页原来写在 `keyboardAndMouse` 门控**内**，而模态窗口可见时恰好把该门控设 False（死代码）；现移到事件循环外层优先处理
+- [x] 创意库存热栏行修复 — `HOTBAR_Y` 236→224（香草图集热栏行 top-down y=112，像素探测槽位边界 18/36/54/72/90 网格 + 112 热栏）
+- [x] 实体距离分层 — `Scene.update_entities()`：水平 64 格内完整模拟；64..128 冻结（渲染保留、AI/物理停跑）；128+ despawn（`die()` 移除）。远处生物群不再拖累帧率（`tests/test_entity_distance.py` 锁定边界与水平距离语义）
+- [x] 位置音效距离衰减修复 — **pygame 2.6.1（SDL3）回归**：双参 `set_volume(left, right)` 会把主音量重置为 1.0，导致 `SoundPhysics` 的 32 格衰减完全失效——所有实体脚步声不管多远都满音量（"不管在什么区块都能听到脚步声"）。改用单参 `set_volume(gain)`（含超出距离的早退分支），立体声 pan 暂时降级（代码注释保留待 pygame 修复）。`tests/test_sound_physics.py` 用静音 buffer 在真 mixer 上锁衰减曲线
+- [x] 图标纹理上传越界修复 — `functions.realize_icon()`：先上传真实尺寸再改绘制宽高；9 处突变点全部换用（修复库存首次 blit 的 access violation）
 
 ### 进行中 / 待办
-- [ ] **纹理错位修复** — 可能是 UV 翻转 / UV 通道 / 材质映射问题
-- [ ] **统一两个 mod 的纹理映射** — Vesna 用 `Materials/*.json`，Paimon 用硬编码
-- [ ] **面索引修复** — 当前 `indices = np.arange(nv)`，未读 `mFaces`
-- [ ] **VBO / glDrawElements 迁移** — 当前用 display list，性能差
-- [ ] **坐标 / 缩放 / 朝向统一** — 两个 mod 的 `MODEL_SCALE` 和 `GROUND_OFFSET` 不一致
+- [ ] **模型渲染 runtime 视觉验证** — 几何/索引/材质名/纹理映射已由测试覆盖，需 `python start.py` 实际确认贴图正确
+- [ ] **VBO / glDrawElements 迁移** — 牛/羊等内置实体仍用 display list，性能差
+- [ ] **坐标 / 缩放 / 朝向统一** — 两个 mod 的 `MODEL_SCALE` 和 `GROUND_OFFSET` 不一致（Paimon 2.0 / Vesna 1.8）
 
 ### 已知问题
-- `fbx_loader.py` 中 `indices = np.arange(nv)` — 对某些模型可能 UV 错位
-- Vesna 和 Paimon 的材质映射逻辑不统一
-- Paimon 的 UV 是量化的（5 个调色板索引），需要专用 shader
+- Paimon 的 UV 是量化的（5 个调色板索引），需要专用 shader——裸 GL 渲染下呈马赛克色块，这是模型源数据特性，不是 bug
+- 按 P 键切换旁观模式（`is_spectator`）保留为旧快捷键；`/gamemode spectator` 与之等价
 
 ---
 
@@ -230,6 +299,8 @@ class MyEntity(PassiveMob):
 6. **`__pycache__` 已提交** — 不要删除或 gitignore
 7. **shader 文件没有显式 `#version`** — 保持兼容模式
 8. **Mod 事件回调抛异常会被自动退订** — 3 次失败即移除
+9. **不要直接改未上传纹理的 `width/height`** — pyglet 惰性 `get_texture()` 会按突变后的尺寸上传像素 buffer，`glTexSubImage2D` 越界读（偶尔 access violation）。放大图标必须用 `functions.realize_icon(image, w, h)`（先按真实尺寸上传，再改 Texture 的绘制宽高）；texture 化之后再改宽高是安全的（只影响绘制 quad）
+10. **GL 平移在外层 = 视图空间平移** — `glTranslatef` 先于 `glRotatef` 调用时平移在视图空间生效（第三人称相机拉回的正确做法）；放在旋转之后会把相机移到世界固定方向上（玩家身后→玩家前方的经典 bug）
 
 ---
 
@@ -267,7 +338,7 @@ class MyEntity(PassiveMob):
 
 ---
 
-*最后更新：2026-09-19*
+*最后更新：2026-10-02*
 *分支：Genshin*
 ```
 

@@ -27,6 +27,25 @@ def _info_label_pool(gl, count):
     return pool
 
 
+def realize_icon(image, width=None, height=None):
+    """Upload an image's pixels now, then set the size it is *drawn* at.
+
+    Mutating ``width``/``height`` on an image pyglet has not textured yet
+    makes the lazy ``get_texture`` upload the pixel buffer with the NEW
+    dimensions, so ``glTexSubImage2D`` reads past the end of the buffer
+    (an access violation whenever the allocation lands near a page
+    boundary).  Uploading first keeps the read inside the buffer; scaling
+    the returned texture afterwards only enlarges the drawn quad, which
+    reproduces the old stretched-icon look safely.
+    """
+    texture = image.get_texture()
+    if width is not None:
+        texture.width = width
+    if height is not None:
+        texture.height = height
+    return texture
+
+
 def load_textures(self):
     print("Loading textures...")
     t = self.texture
@@ -82,8 +101,8 @@ def load_textures(self):
         elif d == 'textures/items':
             self.inventory_textures[n] = pyglet.image.load(f"{d}/{n}.png")
         if n in self.inventory_textures:
-            self.inventory_textures[n].width = 22
-            self.inventory_textures[n].height = 22
+            self.inventory_textures[n] = realize_icon(
+                self.inventory_textures[n], 22, 22)
 
     from game.blocks.Water import configure_water_textures
     configure_water_textures(self)
@@ -119,9 +138,7 @@ def configure_grass_textures(self):
     path = os.path.join("textures", "blocks", "grass", "grass_block_side.png")
     if os.path.isfile(path):
         image = pyglet.image.load(path)
-        image.width = 22
-        image.height = 22
-        self.inventory_textures["grass"] = image
+        self.inventory_textures["grass"] = realize_icon(image, 22, 22)
 
 
 def configure_plant_textures(self):
@@ -130,9 +147,7 @@ def configure_plant_textures(self):
     if tall_grass is not None:
         self.block["tall_grass"] = (tall_grass,) * 6
         image = pyglet.image.load(os.path.join("textures", "tall_grass.png"))
-        image.width = 22
-        image.height = 22
-        self.inventory_textures["tall_grass"] = image
+        self.inventory_textures["tall_grass"] = realize_icon(image, 22, 22)
 
     for name in ("leaves_oak", "leaves_taiga", "tall_grass", "glass"):
         group = self.texture.get(name)

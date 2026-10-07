@@ -161,6 +161,7 @@ class Light:
     TORCH_RADIUS = 15.0
     LIGHT_CELL_SIZE = 16
     SHADOW_QUALITY_SIZES = {"LOW": 512, "MEDIUM": 1024, "HIGH": 2048}
+    SHADOW_UPDATE_RATES = {512: 4.0, 1024: 3.0, 2048: 2.0}
     SHADOW_SIZE = 1024
     SHADOW_RADIUS = 48.0
 
@@ -494,7 +495,9 @@ class Light:
         if not self.shadow_ready:
             should_update = True
         else:
-            rate = {512: 4.0, 1024: 6.0, 2048: 8.0}.get(self.SHADOW_SIZE, 6.0)
+            # Larger maps are substantially more expensive to redraw. A high
+            # shadow resolution improves image quality, not update frequency.
+            rate = self.SHADOW_UPDATE_RATES.get(self.SHADOW_SIZE, 3.0)
             interval = 1.0 / rate
             should_update = self.elapsed - self.last_shadow_time >= interval
 

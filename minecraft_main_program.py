@@ -12,12 +12,14 @@ import pyglet
 from pygame._sdl2 import Window as SDLWindow
 from OpenGL.GL import *
 from OpenGL.raw.GLU import gluOrtho2D
-from functions import drawInfoLabel, getElpsTime, translateSeed
+from functions import drawInfoLabel, getElpsTime, realize_icon, translateSeed
 from game.GUI.Button import Button
+from game.GUI.Chat import Chat
 from game.GUI.Editarea import Editarea
 from game.GUI.GUI import GUI
 from game.GUI.Sliderbox import Sliderbox
 from game.entity.Player import Player
+from game.entity.CreativeInventory import CreativeInventory
 from game.sound.BlockSound import BlockSound
 from game.sound.Sound import Sound
 from game.Scene import Scene
@@ -43,15 +45,18 @@ def log_deb(msg):
 
 
 def create_opengl_display(size, flags):
-    """Create every GL context with a safe 4x-MSAA fallback."""
+    """Create the GL context honouring the saved vsync/MSAA settings."""
     pygame.display.gl_set_attribute(pygame.GL_DEPTH_SIZE, 24)
-    # Always request a multisample-capable framebuffer so the setting can be
-    # toggled at runtime; Scene.setAntialiasing controls whether it is active.
-    samples = 4
-    pygame.display.gl_set_attribute(pygame.GL_MULTISAMPLEBUFFERS, 1)
+    # Request multisampling only when anti-aliasing is enabled in options;
+    # Scene.setAntialiasing still toggles it at runtime when present.
+    samples = 4 if settings.ANTI_ALIASING else 0
+    pygame.display.gl_set_attribute(pygame.GL_MULTISAMPLEBUFFERS, 1 if samples else 0)
     pygame.display.gl_set_attribute(pygame.GL_MULTISAMPLESAMPLES, samples)
+    # vsync would cap the frame rate at the monitor refresh rate; it must be
+    # off for high-FPS targets, so it is driven by the saved setting.
+    vsync = 1 if settings.VSYNC else 0
     try:
-        return pygame.display.set_mode(size, flags, vsync=1)
+        return pygame.display.set_mode(size, flags, vsync=vsync)
     except pygame.error:
         if not samples:
             raise
@@ -59,7 +64,7 @@ def create_opengl_display(size, flags):
         pygame.display.gl_set_attribute(pygame.GL_MULTISAMPLEBUFFERS, 0)
         pygame.display.gl_set_attribute(pygame.GL_MULTISAMPLESAMPLES, 0)
         settings.set_anti_aliasing(False)
-        return pygame.display.set_mode(size, flags, vsync=1)
+        return pygame.display.set_mode(size, flags, vsync=vsync)
 
 def choose_langs():
     global lang_choose, mainFunction, translations
@@ -121,6 +126,8 @@ def saveWorld(worldGen, save_path):
 def quit_to_menu():
     log_deb("quitting to menu...")
     global PAUSE, IN_MENU, mainFunction
+    creative_inventory.window.destroyWindow()
+    chat.close()
     log_deb("saving world...")
     saveWorld(scene.worldGen, "saves/Current_world")
     tex = gui.GUI_TEXTURES["options_background"]
@@ -182,6 +189,33 @@ def cycle_shadow_quality():
     settings.set_shadow_quality(quality)
     scene.light.set_shadow_quality(quality)
 
+def cycle_blackhole_quality():
+    qualities = ("OFF", "LOW", "HIGH")
+    current = qualities.index(settings.BLACKHOLE_QUALITY)
+    quality = qualities[(current + 1) % len(qualities)]
+    settings.set_blackhole_quality(quality)
+    scene.sky_shader.set_quality(quality)
+
+CLOUD_QUALITY_LABELS = {
+    "POTATO": "Potato",
+    "LOW": "Low",
+    "MEDIUM": "Medium",
+    "HIGH": "High",
+    "GPU": "I PAID FOR THE WHOLE GPU!",
+}
+
+def cycle_cloud_quality():
+    qualities = settings.CLOUD_QUALITY_LEVELS
+    current = qualities.index(settings.CLOUD_QUALITY)
+    quality = qualities[(current + 1) % len(qualities)]
+    settings.set_cloud_quality(quality)
+    scene.clouds.set_quality(quality)
+
+def toggle_vsync():
+    # SDL applies vsync only at window creation, so the new value takes
+    # effect the next time the game starts.
+    settings.set_vsync(not settings.VSYNC)
+
 def toggle_anti_aliasing():
     enabled = not settings.ANTI_ALIASING
     if enabled:
@@ -209,10 +243,6 @@ def edit_panorama():
     global mainFunction
     mainFunction = draw_panorama_menu
 
-def draw_command_function():
-    global mainFunction
-    mainFunction = draw_command
-
 def close_settings():
     global mainFunction
     mainFunction = draw_main_menu
@@ -238,20 +268,16 @@ def pause():
 
 def death_screen():
     global PAUSE, mainFunction
+    chat.close()
+    # A modal window open at the moment of death can never receive ESC while
+    # the death screen is up (updateScene stops running), so it would re-grab
+    # allowEvents right after respawn and lock the player out of the game.
+    creative_inventory.window.destroyWindow()
+    player.inventory.window.destroyWindow()
     PAUSE = True
     scene.allowEvents["movePlayer"] = True
     scene.allowEvents["keyboardAndMouse"] = True
     mainFunction = draw_death_screen
-
-def draw_command(mc):
-    scene.set2d()
-    mp = pygame.mouse.get_pos()
-    _keys = pygame.key.get_pressed()
-    commandEditArea.x = scene.WIDTH // 2 - (commandEditArea.bg.width // 2)
-    commandEditArea.y = scene.HEIGHT // 2 - (commandEditArea.bg.height // 2)
-    commandEditArea.update(mp, mc, _keys)
-    pygame.display.flip()
-    clock.tick(MAX_FPS)
 
 def draw_panorama_menu(mc):
     def set_panorama(path):
@@ -527,24 +553,29 @@ def draw_shader_settings_menu(mc):
     center_x = scene.WIDTH // 2 + 105
     button_x = center_x - 200
     options = (
-        (f"Shaders: {'YES' if settings.SHADERS else 'NO'}", toggle_shaders),
-        (f"Shadow Quality: {settings.SHADOW_QUALITY}", cycle_shadow_quality),
-        (f"Anti-Aliasing: {'YES' if settings.ANTI_ALIASING else 'NO'}", toggle_anti_aliasing),
-        (f"Dynamic Lighting: {'YES' if settings.DYNAMIC_LIGHTING else 'NO'}", toggle_dynamic_lighting),
-        (f"Player Shadows: {'YES' if settings.PLAYER_SHADOWS else 'NO'}", toggle_player_shadows),
-        (f"Leaves Sway: {'YES' if settings.LEAVES_SWAY else 'NO'}", toggle_leaves_sway),
+        (f"Shaders: {'YES' if settings.SHADERS else 'NO'}", toggle_shaders, None),
+        (f"Shadow Quality: {settings.SHADOW_QUALITY}", cycle_shadow_quality, None),
+        (f"Black Hole: {settings.BLACKHOLE_QUALITY}", cycle_blackhole_quality, None),
+        ("Cloud Realism: " + CLOUD_QUALITY_LABELS[settings.CLOUD_QUALITY],
+         cycle_cloud_quality,
+         (255, 80, 80) if settings.CLOUD_QUALITY == "GPU" else None),
+        (f"VSync: {'YES' if settings.VSYNC else 'NO'} (restart)", toggle_vsync, None),
+        (f"Anti-Aliasing: {'YES' if settings.ANTI_ALIASING else 'NO'}", toggle_anti_aliasing, None),
+        (f"Dynamic Lighting: {'YES' if settings.DYNAMIC_LIGHTING else 'NO'}", toggle_dynamic_lighting, None),
+        (f"Player Shadows: {'YES' if settings.PLAYER_SHADOWS else 'NO'}", toggle_player_shadows, None),
+        (f"Leaves Sway: {'YES' if settings.LEAVES_SWAY else 'NO'}", toggle_leaves_sway, None),
     )
-    for index, (text, callback) in enumerate(options):
-        button = Button(scene, text, 0, 0, text_x=center_x)
+    for index, (text, callback, color) in enumerate(options):
+        button = Button(scene, text, 0, 0, text_x=center_x, label_color=color)
         button.setEvent(callback)
         button.x = button_x
-        button.y = scene.HEIGHT // 2 - 135 + index * 45
+        button.y = scene.HEIGHT // 2 - 160 + index * 38
         button.update(mp, mc)
 
     back_button = Button(scene, "Back", 0, 0)
     back_button.setEvent(close_shader_settings)
     back_button.x = scene.WIDTH // 2 - back_button.button.width // 2
-    back_button.y = scene.HEIGHT // 2 + 145
+    back_button.y = scene.HEIGHT // 2 + 190
     back_button.update(mp, mc)
 
     pygame.display.flip()
@@ -699,6 +730,8 @@ gui.GUI_TEXTURES = {
     "language": pyglet.resource.image("gui/language_h.png"),
     "language_hover": pyglet.resource.image("gui/language_nh.png"),
     "zentra": pyglet.resource.image("gui/Zentra.png"),
+    "creative_items_raw": pyglet.resource.image(
+        "gui/container/creative_inventory/tab_items.png"),
 }
 
 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
@@ -715,23 +748,34 @@ this___ = [
     "game_logo",
 ]
 for i in this_:
-    texture = gui.GUI_TEXTURES[i]
-    texture.width *= 2
-    texture.height *= 2
+    texture = realize_icon(gui.GUI_TEXTURES[i],
+                           gui.GUI_TEXTURES[i].width * 2,
+                           gui.GUI_TEXTURES[i].height * 2)
+    gui.GUI_TEXTURES[i] = texture
 for i in this__:
-    texture = gui.GUI_TEXTURES[i]
-    texture.width *= 6
-    texture.height *= 6
+    texture = realize_icon(gui.GUI_TEXTURES[i],
+                           gui.GUI_TEXTURES[i].width * 6,
+                           gui.GUI_TEXTURES[i].height * 6)
+    gui.GUI_TEXTURES[i] = texture
 for i in this___:
-    texture = gui.GUI_TEXTURES[i]
-    texture.width /= 2
-    texture.height /= 2
-zentra = gui.GUI_TEXTURES["zentra"]
-zentra.width = 96
-zentra.height = 96
+    texture = realize_icon(gui.GUI_TEXTURES[i],
+                           int(gui.GUI_TEXTURES[i].width / 2),
+                           int(gui.GUI_TEXTURES[i].height / 2))
+    gui.GUI_TEXTURES[i] = texture
+zentra = realize_icon(gui.GUI_TEXTURES["zentra"], 96, 96)
+gui.GUI_TEXTURES["zentra"] = zentra
+# Creative inventory window: the vanilla items-tab content sits in the
+# top-left 195x136 of the 256x256 atlas; crop it, then scale 2x like the
+# other GUI textures.
+creative_region = gui.GUI_TEXTURES["creative_items_raw"].get_region(
+    0, 120, 195, 136)
+gui.GUI_TEXTURES["creative_items"] = realize_icon(creative_region, 390, 272)
+gui.GUI_TEXTURES.pop("creative_items_raw", None)
 gui.addGuiElement("crosshair", (scene.WIDTH // 2 - 9, scene.HEIGHT // 2 - 9))
 
 player.inventory.initWindow()
+creative_inventory = CreativeInventory(scene)
+creative_inventory.initWindow()
 ModLoader.load_remaining()
 
 showInfoLabel = False
@@ -757,15 +801,8 @@ soundVolumeSliderBox = Sliderbox(scene, translations["sound.volume"], 100, 0, 0)
 soundVolumeSliderBox.val = round(settings.SOUND_VOLUME * 100)
 soundVolumeSliderBox.setEvent(update_sound_volume)
 seedEditArea = Editarea(scene, translations["World.Seed"], 0, 0)
-commandEditArea = Editarea(scene, "Commands input here", 0, 0)
+chat = Chat(scene)
 
-def process_command(command):
-    if command.strip() == "/clear":
-        commandEditArea.text = ""
-    elif command.strip() == "/exit":
-        exit()
-
-commandEditArea.setEvent(process_command)
 closeSettingsButton.setEvent(close_settings)
 
 resumeButton = Button(scene, translations["backgame"], 0, 0)
@@ -787,6 +824,7 @@ gc.freeze()
 
 # Delta time variables
 last_time = time.time()
+last_caption_time = 0.0
 
 while True:
     # Calculate delta time
@@ -798,7 +836,11 @@ while True:
         dt = 0.05
 
     pyglet.options['debug_gl'] = False
-    pygame.display.set_caption(f"Minecraft {MC_VERSION} {clock.get_fps()}")
+    # Updating the SDL window title every frame costs Python time and an SDL
+    # call; 4 Hz is plenty for a live FPS counter.
+    if current_time - last_caption_time > 0.25:
+        pygame.display.set_caption(f"Minecraft {MC_VERSION} {clock.get_fps():.0f}")
+        last_caption_time = current_time
     mbclicked = None
     keys = []
 
@@ -834,12 +876,33 @@ while True:
         if event.type == pygame.MOUSEBUTTONDOWN:
             mbclicked = event.button
         if not IN_MENU:
+            # The creative palette owns the mouse wheel while it is open;
+            # this must run BEFORE the keyboardAndMouse gate, because the
+            # modal window sets that gate False exactly while visible.
+            if (event.type == pygame.MOUSEBUTTONDOWN
+                    and event.button in (4, 5)
+                    and creative_inventory.visible):
+                creative_inventory.cycle_page(-1 if event.button == 4 else 1)
+                continue
+            if chat.is_open:
+                # The chat consumes every event, like vanilla: typing 'w'
+                # must not walk the player and clicking must not mine.
+                if event.type == pygame.KEYDOWN:
+                    chat.handle_keydown(event)
+                continue
             if scene.allowEvents["keyboardAndMouse"]:
                 if event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_ESCAPE:
                         pause()
+                    if event.key == pygame.K_t:
+                        chat.open()
+                    if event.key == pygame.K_SLASH:
+                        chat.open("/")
                     if event.key == pygame.K_e:
-                        player.inventory.showWindow()
+                        if player.is_creative:
+                            creative_inventory.show()
+                        else:
+                            player.inventory.showWindow()
                     if event.key == pygame.K_1:
                         player.inventory.activeInventory = 0
                     if event.key == pygame.K_2:
@@ -859,11 +922,11 @@ while True:
                     if event.key == pygame.K_9:
                         player.inventory.activeInventory = 8
                     if event.key == pygame.K_F3:
-                        showInfoLabel = not showInfoLabel
+                        # vanilla: F3 = debug info; hitboxes remain F3+B
+                        if not pygame.key.get_pressed()[pygame.K_b]:
+                            showInfoLabel = not showInfoLabel
                     if event.key == pygame.K_b and pygame.key.get_pressed()[pygame.K_F3]:
                         scene.show_hitboxes = not scene.show_hitboxes
-                    if event.key == pygame.K_t and not IN_MENU:
-                        draw_command_function()
                     if event.key == pygame.K_F5:
                         player.cameraType += 1
                         if player.cameraType > 3:
@@ -875,9 +938,18 @@ while True:
                     if event.key == pygame.K_v:
                         scene.spawn_sheep()
                     if event.key == pygame.K_p:
+                        # legacy spectator toggle: keep the flags consistent
+                        # with /gamemode, otherwise creative+spectator mix
+                        # and the player silently loses the ability to attack
                         player.is_spectator = not player.is_spectator
+                        if player.is_spectator:
+                            player.is_creative = False
                     if event.key == pygame.K_l:
                         player.give_debug_items()
+                        eggs = sorted(getattr(scene, "spawn_egg_items", {}))
+                        chat.add_message(
+                            f"Spawn eggs added to inventory ({len(eggs)} kinds)"
+                            if eggs else "No spawn eggs registered")
                     if event.key == pygame.K_q:
                         player.dropSelectedItem(bool(event.mod & pygame.KMOD_CTRL))
                 if event.type == pygame.MOUSEBUTTONDOWN:
@@ -896,7 +968,7 @@ while True:
                         if player.inventory.inventory[player.inventory.activeInventory][1]:
                             gui.showText(player.inventory.inventory[player.inventory.activeInventory][0])
 
-    gameplay_input = (not PAUSE and not IN_MENU and
+    gameplay_input = (not PAUSE and not IN_MENU and not chat.is_open and
                       scene.allowEvents["keyboardAndMouse"] and
                       scene.allowEvents["movePlayer"])
     if gameplay_input:
@@ -921,6 +993,7 @@ while True:
         scene.updateScene(dt)
         player.inventory.draw()
         gui.update()
+        chat.draw()
 
         if showInfoLabel:
             drawInfoLabel(scene, f"Minecraft {MC_VERSION} ({MC_VERSION}/vanilla)\n"

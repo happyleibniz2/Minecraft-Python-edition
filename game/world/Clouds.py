@@ -1,5 +1,27 @@
-"""Volumetric clouds with a layered-puff compatibility fallback."""
+"""Volumetric clouds with a layered-puff compatibility fallback.
 
+The volume pass is a physically-inspired approximation of in-scattering in a
+participating medium, in the spirit of Unreal Engine's volumetric clouds:
+
+* **Density field**: a Perlin-ish FBM base shape blended with Worley cell
+  structure, eroded by a high-frequency detail noise at the edges
+  (``1 - density`` weighting) so cores stay thick and edges turn wispy.
+* **Lighting**: Beer-Lambert transmittance toward the sun computed by a
+  secondary, lower-sample light march (true self-shadowing), a dual-lobe
+  Henyey-Greenstein phase function (strong forward scatter + softer backward
+  lobe), a powder term that keeps cloud cores from flattening out, and an
+  ambient term approximating one octave of multiple scattering.
+* **Sampling discipline**: interleaved-gradient-noise jittering converts
+  banding into high-frequency noise, adaptive stepping takes large strides
+  through empty space and fine ones inside cloud, and the march early-outs
+  once transmittance falls below threshold.
+
+Quality tiers (``settings.CLOUD_QUALITY``) scale the sample counts and the
+feature set; ``POTATO`` skips the raymarch entirely and uses classic layered
+billboard puffs instead.
+"""
+
+import logging
 import math
 import random
 
@@ -40,21 +62,25 @@ uniform float gameTime;
 uniform float drawDistance;
 uniform float cloudBase;
 uniform float cloudTop;
+uniform float uSteps;        /* view-march step cap        */
+uniform float uSunSamples;   /* light-march sample cap     */
+uniform float uDetail;       /* erosion detail: 0..2       */
+uniform float uPowder;       /* powder sugar term: 0/1     */
+uniform float uAdaptive;     /* adaptive step sizes: 0/1   */
+uniform float uDualLobe;     /* dual-lobe HG phase: 0/1    */
 
-// Improved hash function for better noise distribution
+// Hash / value noise ------------------------------------------------
 float hash31(vec3 p) {
     p = fract(p * vec3(0.1031, 0.1030, 0.0973));
     p += dot(p, p.yzx + 33.33);
     return fract((p.x + p.y) * p.z);
 }
 
-// Smooth 3D value noise with proper interpolation
 float valueNoise3(vec3 p) {
     vec3 cell = floor(p);
     vec3 local = fract(p);
-    // Quintic interpolation for smoother results (reduces itching)
     local = local * local * local * (local * (local * 6.0 - 15.0) + 10.0);
-    
+
     float n000 = hash31(cell);
     float n100 = hash31(cell + vec3(1, 0, 0));
     float n010 = hash31(cell + vec3(0, 1, 0));
@@ -63,18 +89,17 @@ float valueNoise3(vec3 p) {
     float n101 = hash31(cell + vec3(1, 0, 1));
     float n011 = hash31(cell + vec3(0, 1, 1));
     float n111 = hash31(cell + vec3(1, 1, 1));
-    
+
     float lower = mix(mix(n000, n100, local.x), mix(n010, n110, local.x), local.y);
     float upper = mix(mix(n001, n101, local.x), mix(n011, n111, local.x), local.y);
     return mix(lower, upper, local.z);
 }
 
-// Fractal Brownian Motion with improved octave blending
 float fbm(vec3 p) {
     float value = 0.0;
     float amplitude = 0.5;
     float frequency = 1.0;
-    
+
     for (int i = 0; i < 5; i++) {
         value += amplitude * valueNoise3(p * frequency);
         amplitude *= 0.5;
@@ -83,11 +108,10 @@ float fbm(vec3 p) {
     return value;
 }
 
-// Worley noise for cloud cell structure (reduces repetitive patterns)
 float worleyNoise(vec3 p) {
     vec3 cell = floor(p);
     vec3 local = fract(p);
-    
+
     float minDist = 1.0;
     for (int x = -1; x <= 1; x++) {
         for (int y = -1; y <= 1; y++) {
@@ -104,37 +128,79 @@ float worleyNoise(vec3 p) {
     return minDist;
 }
 
+// Density field: Perlin-Worley base with edge erosion ---------------
 float cloudDensity(vec3 world) {
     float height = clamp((world.y - cloudBase) / (cloudTop - cloudBase), 0.0, 1.0);
-    float bottom = smoothstep(0.0, 0.2, height);
+    float bottom = smoothstep(0.0, 0.18, height);
     float top = 1.0 - smoothstep(0.55, 1.0, height);
-    float anvil = mix(0.75, 1.15, smoothstep(0.1, 0.75, height));
+    // Top-heavy cumulus: billowing volume above a flat base.
+    float anvil = mix(0.7, 1.3, smoothstep(0.1, 0.75, height));
 
-    // CRITICAL FIX: Add height gradient for volumetric depth (bottom darker, top brighter)
+    // Height gradient for volumetric depth (bottom darker, top brighter).
     float heightGradient = smoothstep(0.0, 0.25, height) * smoothstep(1.0, 0.65, height);
 
-    // Animate cloud movement over time
     vec3 samplePosition = vec3(
-        (world.x + windOffset.x) * 0.008,
+        (world.x + windOffset.x) * 0.006,
         height * 1.6,
-        (world.z + windOffset.y) * 0.008);
-    
-    // Combine FBM and Worley noise for more realistic cloud shapes
+        (world.z + windOffset.y) * 0.006);
+
+    // Perlin-ish base shape blended with Worley cell structure. Larger
+    // horizontal cells make distant clouds read as puffy masses rather than
+    // a flat haze sheet.
     float baseShape = fbm(samplePosition) * anvil;
-    float cellStructure = worleyNoise(samplePosition * 2.5 + vec3(gameTime * 0.002, 0, 0));
-    
-    // Blend noises for varied cloud appearance
+    float cellStructure = worleyNoise(samplePosition * 2.0 + vec3(gameTime * 0.002, 0, 0));
     float shape = mix(baseShape, cellStructure, 0.3);
-    
+
     float threshold = 0.65 - coverage * 0.35 - weatherStrength * 0.1;
-    float density = (shape - threshold) * 2.8;
-    
-    // Add fine detail without causing itching
-    float detail = valueNoise3(samplePosition * 5.0 + vec3(0, gameTime * 0.003, 0));
-    density = density * (0.85 + 0.15 * detail);
-    
-    // Apply height gradient for natural lighting variation
+    // Stronger core/edge contrast is what makes clouds look volumetric:
+    // wide empty gaps, compact thick cores.
+    float density = (shape - threshold) * 3.4;
+    density = clamp(density, 0.0, 1.0);
+    density = pow(density, 1.2);
+
+    float detailNoise = valueNoise3(samplePosition * 5.0 + vec3(0, gameTime * 0.003, 0));
+    density = density * (0.85 + 0.15 * detailNoise);
+
+    // Erosion: high-frequency Worley carves the cloud boundary where the
+    // base density is thin, turning smooth blobs into wispy edges.
+    if (uDetail > 0.5) {
+        float erode = worleyNoise(samplePosition * 4.0
+            + vec3(windOffset.x, gameTime * 0.004, windOffset.y) * 0.05);
+        density -= erode * 0.3 * (1.0 - density);
+        if (uDetail > 1.5) {
+            float fine = valueNoise3(samplePosition * 9.0
+                + vec3(0.0, gameTime * 0.006, 0.0));
+            density -= fine * 0.10 * (1.0 - density);
+        }
+    }
+
     return clamp(density * bottom * top * heightGradient, 0.0, 1.0);
+}
+
+// Phase functions ---------------------------------------------------
+float hgPhase(float cosTheta, float g) {
+    float denom = max(pow(1.0 + g * g - 2.0 * g * cosTheta, 1.5), 0.0001);
+    return (1.0 - g * g) / (12.566 * denom);
+}
+
+// Light transmittance: secondary march toward the sun --------------
+float lightTransmittance(vec3 pos) {
+    if (uSunSamples < 0.5) {
+        return 1.0;
+    }
+    float sunStep = 36.0 / max(uSunSamples, 1.0);
+    float opticalDepth = 0.0;
+    for (int j = 0; j < 8; j++) {
+        if (float(j) >= uSunSamples) {
+            break;
+        }
+        vec3 samplePos = pos + sunDirection * (float(j) + 0.5) * sunStep;
+        opticalDepth += cloudDensity(samplePos) * sunStep;
+        if (opticalDepth > 2.0) {
+            break;  // transmittance already below ~10 %, further samples are noise
+        }
+    }
+    return exp(-opticalDepth * 0.12);
 }
 
 void main() {
@@ -144,7 +210,7 @@ void main() {
         + cameraRight * screen.x * tanHalfFov
         + cameraUp * screen.y * tanHalfFov);
 
-    // Skip nearly horizontal rays
+    // Skip nearly horizontal rays.
     if (abs(rayDirection.y) < 0.0001) {
         discard;
     }
@@ -157,56 +223,81 @@ void main() {
         discard;
     }
 
-    // CRITICAL FIX: Increased steps from 16 to 32 for smoother volumetric rendering
-    const int STEPS = 32;
-    float stepLength = (farDistance - nearDistance) / float(STEPS);
-    
-    // Temporal reprojection for anti-aliasing (reduces itching)
-    float jitter = hash31(vec3(gl_FragCoord.xy, fract(gameTime * 0.1))) * stepLength * 0.5;
+    float baseStep = (farDistance - nearDistance) / max(uSteps, 1.0);
+
+    // Interleaved gradient noise jitter: banding becomes high-frequency noise.
+    vec2 pixel = screenUv * vec2(512.0);
+    float jitter = fract(52.9829189 * fract(dot(pixel, vec2(0.06711056, 0.00583715)))
+                         + fract(gameTime * 7.31)) * baseStep;
     float distanceAlongRay = nearDistance + jitter;
-    
+
     float transmittance = 1.0;
     vec3 accumulated = vec3(0.0);
+    float cosTheta = dot(rayDirection, sunDirection);
+    float phase = hgPhase(cosTheta, 0.55);
+    if (uDualLobe > 0.5) {
+        // Dual-lobe Mie: strong forward scattering plus the dim backward lobe
+        // that gives backlit clouds their bright drop-shadowed rim.
+        phase = max(phase, hgPhase(cosTheta, -0.25) * 0.7);
+    }
+    float stepLength = baseStep;
 
-    for (int stepIndex = 0; stepIndex < STEPS; ++stepIndex) {
+    for (int stepIndex = 0; stepIndex < 32; ++stepIndex) {
+        if (float(stepIndex) >= uSteps) {
+            break;
+        }
         vec3 position = cameraPosition + rayDirection * distanceAlongRay;
         float density = cloudDensity(position);
-        
-        if (density > 0.003) {
-            // CRITICAL FIX: Every step samples towards the sun (was only every 3rd step)
-            float towardSun = cloudDensity(position + sunDirection * 4.0);
-            
-            // CRITICAL FIX: Increased light transmission coefficient from 2.5 to 5.0
-            float lightTransmission = exp(-towardSun * 5.0);
-            float forwardScatter = pow(max(dot(rayDirection, sunDirection), 0.0), 8.0);
-            float silverLining = forwardScatter * lightTransmission * 0.7;
 
-            // Time-based cloud coloring (BSL style)
+        if (density > 0.003) {
+            float shadowTransmittance = lightTransmittance(position);
+
+            // Powder sugar term: keeps dense cores bright while thinning the
+            // edges, fighting the flat "cotton ball" look of plain Beer.
+            float powder = 1.0;
+            if (uPowder > 0.5) {
+                powder = 1.0 - exp(-density * stepLength * 0.8);
+                powder = mix(0.45, 1.0, powder);
+            }
+
+            // Ambient term: one octave of multiple scattering so thick cloud
+            // bodies stay luminous instead of grey; kept bot-heavy so the
+            // undersides fall off into shadow and sell the volume.
+            float topBias = clamp((position.y - cloudBase) / (cloudTop - cloudBase), 0.0, 1.0);
+            vec3 ambient = skyColor * daylight * (0.24 + 0.24 * topBias);
+
             vec3 nightCloud = vec3(0.18, 0.22, 0.30);
             vec3 dayCloud = vec3(0.95, 0.93, 0.90);
             vec3 sunsetCloud = vec3(1.0, 0.78, 0.65);
-            
             vec3 shadowColor = mix(
                 mix(nightCloud, vec3(0.35, 0.40, 0.50), daylight),
                 vec3(0.20, 0.24, 0.32), weatherStrength);
-            vec3 litColor = mix(dayCloud, sunsetCloud, 
-                smoothstep(0.75, 0.85, fract(gameTime / 24.0)) * 
+            vec3 litBase = mix(dayCloud, sunsetCloud,
+                smoothstep(0.75, 0.85, fract(gameTime / 24.0)) *
                 (1.0 - smoothstep(0.83, 0.92, fract(gameTime / 24.0))));
-            
-            vec3 sampleColor = mix(shadowColor, litColor,
-                clamp(lightTransmission * 0.7 + silverLining, 0.0, 1.0));
 
-            // CRITICAL FIX: Increased Beer-Lambert extinction from 0.045 to 0.12
+            float silverLining = pow(max(cosTheta, 0.0), 8.0) * shadowTransmittance;
+            float lightTerm = shadowTransmittance * phase * 2.8 + silverLining * 0.8;
+            vec3 sampleColor = shadowColor * (0.8 + 0.4 * ambient.r)
+                + ambient * 0.35
+                + litBase * lightTerm * powder * 1.15;
+
             float extinction = density * stepLength * 0.12;
             float alpha = 1.0 - exp(-extinction);
             accumulated += sampleColor * alpha * transmittance;
             transmittance *= 1.0 - alpha;
-            
+
+            stepLength = baseStep;
             if (transmittance < 0.02) {
                 break;
             }
+        } else if (uAdaptive > 0.5) {
+            stepLength = baseStep * 3.0;  // large strides through empty air
         }
         distanceAlongRay += stepLength;
+        if (distanceAlongRay > farDistance) {
+            break;
+        }
     }
 
     float alpha = 1.0 - transmittance;
@@ -214,15 +305,15 @@ void main() {
         discard;
     }
 
-    // Smooth horizon and distance fading
+    // Smooth horizon and distance fading.
     float horizonFade = smoothstep(0.0, 0.15, abs(rayDirection.y));
     float distanceFade = 1.0 - smoothstep(drawDistance * 0.65, drawDistance, farDistance);
     alpha *= mix(0.4, 1.0, horizonFade) * max(0.5, distanceFade);
 
-    // Blend with atmospheric scattering
+    // Blend with atmospheric scattering.
     vec3 atmospheric = mix(horizonColor, skyColor, clamp(rayDirection.y * 2.5, 0.0, 1.0));
     accumulated = mix(atmospheric * alpha * 0.3, accumulated, clamp(alpha * 1.3, 0.0, 1.0));
-    
+
     gl_FragColor = vec4(accumulated, alpha);
 }
 """
@@ -237,6 +328,27 @@ class Clouds:
     GRID_SPACING = 40.0
     WIND_SPEED = 1.5
 
+    # Volumetric parameters per quality tier; POTATO skips the raymarch and
+    # uses the billboard-puff fallback. GPU is the cinematic tier: full
+    # multiple-scattering dual-lobe lighting with dense sun sampling at full
+    # resolution; the playable tiers render at half resolution and are
+    # bilinearly upsampled, the standard volumetric-cloud optimisation.
+    QUALITY_PARAMS = {
+        "POTATO": None,
+        "LOW":    {"steps": 8,  "sun_samples": 1, "detail": 0,
+                   "powder": 0, "adaptive": 1, "dual_lobe": 0,
+                   "resolution_scale": 0.5},
+        "MEDIUM": {"steps": 16, "sun_samples": 4, "detail": 1,
+                   "powder": 1, "adaptive": 1, "dual_lobe": 1,
+                   "resolution_scale": 0.5},
+        "HIGH":   {"steps": 24, "sun_samples": 6, "detail": 2,
+                   "powder": 1, "adaptive": 1, "dual_lobe": 1,
+                   "resolution_scale": 0.5},
+        "GPU":    {"steps": 32, "sun_samples": 8, "detail": 2,
+                   "powder": 1, "adaptive": 1, "dual_lobe": 1,
+                   "resolution_scale": 1.0},
+    }
+
     def __init__(self, gl):
         self.gl = gl
         self.wind_x = 0.0
@@ -248,11 +360,45 @@ class Clouds:
         self.texture = self._build_puff_texture()
         self.volume_shader = None
         self.volume_uniforms = {}
+        self._quality = "MEDIUM"
+        self._params = self.QUALITY_PARAMS[self._quality]
+        # Off-screen buffer for the reduced-resolution cloud pass.
+        self._cloud_fbo = 0
+        self._cloud_texture = 0
+        self._cloud_fbo_size = (0, 0)
         self._initialize_volume_shader()
+
+    def close(self):
+        """Release the half-res cloud framebuffer before a scene reset."""
+        if self._cloud_fbo:
+            try:
+                glDeleteFramebuffers(1, [self._cloud_fbo])
+            except Exception:
+                pass
+        if self._cloud_texture:
+            try:
+                glDeleteTextures([self._cloud_texture])
+            except Exception:
+                pass
+        self._cloud_fbo = 0
+        self._cloud_texture = 0
+        self._cloud_fbo_size = (0, 0)
 
     @property
     def shadow_offset(self):
         return self.wind_x, self.wind_z
+
+    @property
+    def quality(self):
+        return self._quality
+
+    def set_quality(self, quality):
+        """Select the cloud realism tier (POTATO/LOW/MEDIUM/HIGH/GPU)."""
+        quality = str(quality).upper()
+        if quality not in self.QUALITY_PARAMS:
+            quality = "MEDIUM"
+        self._quality = quality
+        self._params = self.QUALITY_PARAMS[quality]
 
     def update(self, dt):
         self.wind_x += self.WIND_SPEED * max(0.0, dt)
@@ -267,22 +413,105 @@ class Clouds:
 
     def render(self, player, cycle):
         light = getattr(self.gl, "light", None)
-        if self.volume_shader and light is not None and light.enabled:
+        can_raymarch = (self._params is not None
+                        and self.volume_shader
+                        and light is not None and light.enabled)
+        if can_raymarch:
             self._render_volume(player, cycle)
         else:
             self._render_puffs(player, cycle)
 
     def _render_volume(self, player, cycle):
-        yaw = math.radians(player.rotation[1])
-        pitch = math.radians(player.rotation[0])
-        cos_pitch = math.cos(pitch)
-        sin_pitch = math.sin(pitch)
-        sin_yaw = math.sin(yaw)
-        cos_yaw = math.cos(yaw)
-        forward = (sin_yaw * cos_pitch, -sin_pitch, -cos_yaw * cos_pitch)
-        right = (cos_yaw, 0.0, sin_yaw)
-        up = (sin_yaw * sin_pitch, cos_pitch, -cos_yaw * sin_pitch)
+        scale = self._params["resolution_scale"]
+        if scale < 1.0:
+            self._render_volume_scaled(player, cycle, scale)
+            return
+        self._render_volume_direct(player, cycle)
 
+    def _ensure_cloud_buffer(self, width, height):
+        """(Re)create the reduced-resolution cloud framebuffer on demand."""
+        if self._cloud_fbo_size == (width, height):
+            return
+        self.close()
+        self._cloud_texture = glGenTextures(1)
+        glBindTexture(GL_TEXTURE_2D, self._cloud_texture)
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0,
+                     GL_RGBA, GL_UNSIGNED_BYTE, None)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
+
+        self._cloud_fbo = glGenFramebuffers(1)
+        glBindFramebuffer(GL_FRAMEBUFFER, self._cloud_fbo)
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                               GL_TEXTURE_2D, self._cloud_texture, 0)
+        complete = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE
+        glBindFramebuffer(GL_FRAMEBUFFER, 0)
+        if not complete:
+            logging.warning("cloud framebuffer incomplete; falling back to full res")
+            self.close()
+            self._params = dict(self._params, resolution_scale=1.0)
+            return
+        self._cloud_fbo_size = (width, height)
+
+    def _render_volume_scaled(self, player, cycle, scale):
+        """Raymarch the clouds into a half-res buffer, then upscale.
+
+        The soft, high-frequency nature of clouds makes bilinear upsampling
+        nearly invisible while cutting the most expensive per-pixel pass by
+        the square of the resolution scale.
+        """
+        width = max(2, int(self.gl.WIDTH * scale))
+        height = max(2, int(self.gl.HEIGHT * scale))
+        self._ensure_cloud_buffer(width, height)
+        if not self._cloud_fbo:
+            self._render_volume_direct(player, cycle)
+            return
+
+        glPushAttrib(GL_ENABLE_BIT | GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT
+                     | GL_CURRENT_BIT | GL_VIEWPORT_BIT)
+        try:
+            glBindFramebuffer(GL_FRAMEBUFFER, self._cloud_fbo)
+            glViewport(0, 0, width, height)
+            glClearColor(0.0, 0.0, 0.0, 0.0)
+            glClear(GL_COLOR_BUFFER_BIT)
+            self._draw_cloud_quad(player, cycle)
+            glBindFramebuffer(GL_FRAMEBUFFER, 0)
+
+            # Composite the upscaled buffer over the sky at FULL window size;
+            # the buffer pass above reduced the viewport for the FBO and it
+            # must be restored before drawing the fullscreen quad.
+            glViewport(0, 0, self.gl.WIDTH, self.gl.HEIGHT)
+
+            # Composite the upscaled buffer over the sky, exactly where the
+            # direct pass used to draw.
+            glMatrixMode(GL_PROJECTION)
+            glPushMatrix()
+            glLoadIdentity()
+            glMatrixMode(GL_MODELVIEW)
+            glPushMatrix()
+            glLoadIdentity()
+            glDisable(GL_DEPTH_TEST)
+            glDepthMask(GL_FALSE)
+            glEnable(GL_BLEND)
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+            glEnable(GL_TEXTURE_2D)
+            glBindTexture(GL_TEXTURE_2D, self._cloud_texture)
+            glBegin(GL_QUADS)
+            glTexCoord2f(0.0, 0.0); glVertex2f(-1.0, -1.0)
+            glTexCoord2f(1.0, 0.0); glVertex2f(1.0, -1.0)
+            glTexCoord2f(1.0, 1.0); glVertex2f(1.0, 1.0)
+            glTexCoord2f(0.0, 1.0); glVertex2f(-1.0, 1.0)
+            glEnd()
+            glMatrixMode(GL_PROJECTION)
+            glPopMatrix()
+            glMatrixMode(GL_MODELVIEW)
+            glPopMatrix()
+        finally:
+            glPopAttrib()
+
+    def _render_volume_direct(self, player, cycle):
         glPushAttrib(GL_ENABLE_BIT | GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT | GL_CURRENT_BIT)
         glMatrixMode(GL_PROJECTION)
         glPushMatrix()
@@ -295,41 +524,62 @@ class Clouds:
             glDepthMask(GL_FALSE)
             glEnable(GL_BLEND)
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
-            glUseProgram(self.volume_shader)
-
-            self._uniform3("cameraPosition", player.position)
-            self._uniform3("cameraForward", forward)
-            self._uniform3("cameraRight", right)
-            self._uniform3("cameraUp", up)
-            self._uniform3("sunDirection", cycle.light_direction)
-            self._uniform3("skyColor", cycle.zenith_color)
-            self._uniform3("horizonColor", cycle.horizon_color)
-            self._uniform2("windOffset", self.shadow_offset)
-            self._uniform1("aspectRatio", self.gl.WIDTH / self.gl.HEIGHT)
-            self._uniform1("tanHalfFov", math.tan(math.radians(self.gl.fov) / 2))
-            self._uniform1("coverage", self.coverage)
-            self._uniform1("weatherStrength", self.weather_strength)
-            self._uniform1("daylight", cycle.sky_brightness)
-            self._uniform1("gameTime", getattr(getattr(self.gl, "light", None), "elapsed", 0.0))
-            self._uniform1("drawDistance", self.DRAW_DISTANCE)
-            self._uniform1("cloudBase", self.CLOUD_BASE)
-            self._uniform1("cloudTop", self.CLOUD_TOP)
-
-            glBegin(GL_QUADS)
-            glTexCoord2f(0, 0); glVertex2f(-1, -1)
-            glTexCoord2f(1, 0); glVertex2f(1, -1)
-            glTexCoord2f(1, 1); glVertex2f(1, 1)
-            glTexCoord2f(0, 1); glVertex2f(-1, 1)
-            glEnd()
+            self._draw_cloud_quad(player, cycle)
         finally:
             glUseProgram(0)
-            glDepthMask(GL_TRUE)
-            glMatrixMode(GL_MODELVIEW)
-            glPopMatrix()
             glMatrixMode(GL_PROJECTION)
             glPopMatrix()
             glMatrixMode(GL_MODELVIEW)
+            glPopMatrix()
             glPopAttrib()
+
+    def _draw_cloud_quad(self, player, cycle):
+        """Bind the cloud shader, upload uniforms and draw the NDC quad."""
+        glUseProgram(self.volume_shader)
+        self._apply_volume_uniforms(player, cycle)
+        glBegin(GL_QUADS)
+        glTexCoord2f(0, 0); glVertex2f(-1, -1)
+        glTexCoord2f(1, 0); glVertex2f(1, -1)
+        glTexCoord2f(1, 1); glVertex2f(1, 1)
+        glTexCoord2f(0, 1); glVertex2f(-1, 1)
+        glEnd()
+        glUseProgram(0)
+
+    def _apply_volume_uniforms(self, player, cycle):
+        yaw = math.radians(player.rotation[1])
+        pitch = math.radians(player.rotation[0])
+        cos_pitch = math.cos(pitch)
+        sin_pitch = math.sin(pitch)
+        sin_yaw = math.sin(yaw)
+        cos_yaw = math.cos(yaw)
+        forward = (sin_yaw * cos_pitch, -sin_pitch, -cos_yaw * cos_pitch)
+        right = (cos_yaw, 0.0, sin_yaw)
+        up = (sin_yaw * sin_pitch, cos_pitch, -cos_yaw * sin_pitch)
+
+        params = self._params
+        self._uniform3("cameraPosition", player.position)
+        self._uniform3("cameraForward", forward)
+        self._uniform3("cameraRight", right)
+        self._uniform3("cameraUp", up)
+        self._uniform3("sunDirection", cycle.light_direction)
+        self._uniform3("skyColor", cycle.zenith_color)
+        self._uniform3("horizonColor", cycle.horizon_color)
+        self._uniform2("windOffset", self.shadow_offset)
+        self._uniform1("aspectRatio", self.gl.WIDTH / self.gl.HEIGHT)
+        self._uniform1("tanHalfFov", math.tan(math.radians(self.gl.fov) / 2))
+        self._uniform1("coverage", self.coverage)
+        self._uniform1("weatherStrength", self.weather_strength)
+        self._uniform1("daylight", cycle.sky_brightness)
+        self._uniform1("gameTime", getattr(getattr(self.gl, "light", None), "elapsed", 0.0))
+        self._uniform1("drawDistance", self.DRAW_DISTANCE)
+        self._uniform1("cloudBase", self.CLOUD_BASE)
+        self._uniform1("cloudTop", self.CLOUD_TOP)
+        self._uniform1("uSteps", params["steps"])
+        self._uniform1("uSunSamples", params["sun_samples"])
+        self._uniform1("uDetail", params["detail"])
+        self._uniform1("uPowder", params["powder"])
+        self._uniform1("uAdaptive", params["adaptive"])
+        self._uniform1("uDualLobe", params["dual_lobe"])
 
     def _render_puffs(self, player, cycle):
         if self.texture is None:
@@ -381,7 +631,7 @@ class Clouds:
                 glTexCoord2f(0, 0); glVertex3f(cx - rx - ux, cy - ry - uy, cz - rz - uz)
                 glTexCoord2f(1, 0); glVertex3f(cx + rx - ux, cy + ry - uy, cz + rz - uz)
                 glTexCoord2f(1, 1); glVertex3f(cx + rx + ux, cy + ry + uy, cz + rz + uz)
-                glTexCoord2f(0, 1); glVertex3f(cx - rx + ux, cy - ry + uy, cz - rz + uz)
+                glTexCoord2f(0, 1); glVertex3f(cx - rx - ux, cy - ry - uy, cz - rz + uz)
             glEnd()
             self.texture.unset_state_recursive()
         finally:
@@ -399,6 +649,8 @@ class Clouds:
                 "sunDirection", "skyColor", "horizonColor", "windOffset",
                 "aspectRatio", "tanHalfFov", "coverage", "weatherStrength",
                 "daylight", "gameTime", "drawDistance", "cloudBase", "cloudTop",
+                "uSteps", "uSunSamples", "uDetail",
+                "uPowder", "uAdaptive", "uDualLobe",
             )
             self.volume_uniforms = {
                 name: glGetUniformLocation(self.volume_shader, name) for name in names
@@ -453,8 +705,8 @@ class Clouds:
         image = pyglet.image.ImageData(size, size, "RGBA", bytes(pixels), pitch=size * 4)
         texture = image.get_texture()
         glBindTexture(texture.target, texture.id)
-        glTexParameteri(texture.target, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
-        glTexParameteri(texture.target, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
-        glTexParameteri(texture.target, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
-        glTexParameteri(texture.target, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
         return pyglet.graphics.TextureGroup(texture)

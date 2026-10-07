@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 """FBX loader for the project's Assimp 5.2.5 Windows DLL."""
 import ctypes
 import os
@@ -26,7 +25,10 @@ class Face(ctypes.Structure):
 
 
 class AiString(ctypes.Structure):
-    _fields_ = [("length", ctypes.c_size_t),
+    # assimp's aiString is { ai_uint32 mLength; char mData[1024]; }.
+    # The length is 4 bytes; using size_t shifted mData by four bytes and
+    # truncated the first four characters of every material name.
+    _fields_ = [("length", ctypes.c_uint32),
                 ("data", ctypes.c_char * 1024)]
 
 
@@ -58,8 +60,8 @@ def _material_names(dll, scene):
         result = dll.aiGetMaterialString(
             materials[index], b"?mat.name", 0, 0, ctypes.byref(value))
         if result == 0 and value.length:
-            names.append(value.data[:value.length].decode(
-                "utf-8", errors="replace"))
+            name = value.data[:value.length].decode("utf-8", errors="replace")
+            names.append(name.split("\x00")[0] or f"material_{index}")
         else:
             names.append(f"material_{index}")
     return names
@@ -74,24 +76,28 @@ def load_fbx(path, flags=(AI_PROCESS_TRIANGULATE |
     """
     dll = _get_dll()
 
-    # Empirically verified for assimp-vc143-mt.dll on Windows x64.
+    # Assimp 5.2.5 aiMesh on Windows x64. mColors[8] is present before
+    # mTextureCoords even when the imported mesh does not contain colours.
+    # Omitting it shifts mFaces from its real offset (208) to 144 and turns
+    # valid indexed meshes into a NULL pointer access.
     class Mesh(ctypes.Structure):
         _fields_ = [
-            ("mPrimitiveTypes", ctypes.c_uint),
-            ("mNumVertices", ctypes.c_uint),
-            ("mNumFaces", ctypes.c_uint),
-            ("_pad0", ctypes.c_uint),
-            ("mVertices", Vec3P),
-            ("mNormals", Vec3P),
-            ("mTangents", Vec3P),
-            ("mBitangents", Vec3P),
-            ("mTextureCoords", Vec3P * 8),
-            ("mNumUVComponents", ctypes.c_uint * 8),
-            ("mFaces", FaceP),
-            ("mNumBones", ctypes.c_uint),
-            ("_pad1", ctypes.c_uint),
-            ("mBones", ctypes.c_void_p),
-            ("mMaterialIndex", ctypes.c_uint),
+            ("mPrimitiveTypes", ctypes.c_uint),       # 0
+            ("mNumVertices", ctypes.c_uint),          # 4
+            ("mNumFaces", ctypes.c_uint),             # 8
+            ("_pad0", ctypes.c_uint),                 # 12
+            ("mVertices", Vec3P),                     # 16
+            ("mNormals", Vec3P),                      # 24
+            ("mTangents", Vec3P),                     # 32
+            ("mBitangents", Vec3P),                   # 40
+            ("mColors", ctypes.c_void_p * 8),         # 48
+            ("mTextureCoords", Vec3P * 8),            # 112
+            ("mNumUVComponents", ctypes.c_uint * 8),  # 176
+            ("mFaces", FaceP),                        # 208
+            ("mNumBones", ctypes.c_uint),             # 216
+            ("_pad1", ctypes.c_uint),                 # 220
+            ("mBones", ctypes.c_void_p),              # 224
+            ("mMaterialIndex", ctypes.c_uint),        # 232
         ]
 
     class Scene(ctypes.Structure):
@@ -143,6 +149,9 @@ def load_fbx(path, flags=(AI_PROCESS_TRIANGULATE |
                             np.float32, copy=True)
 
             face_indices = []
+            if mesh.mNumFaces and not mesh.mFaces:
+                raise RuntimeError(
+                    f"Mesh {mesh_index} has {mesh.mNumFaces} faces but no face pointer")
             for face_index in range(mesh.mNumFaces):
                 face = mesh.mFaces[face_index]
                 if face.mNumIndices != 3:
@@ -172,92 +181,3 @@ def load_fbx(path, flags=(AI_PROCESS_TRIANGULATE |
         return meshes
     finally:
         dll.aiReleaseImport(scene_pointer)
-=======
-"""FBX loader using pyassimp (proper structure handling)."""
-import os
-
-import numpy as np
-import pyassimp
-from pyassimp import postprocess
-
-
-# aiProcess flags - add Debone to avoid bone-related crashes
-AI_PROCESS_DEBONE = 0x40000000
-
-def load_fbx(path, flags=postprocess.aiProcess_Triangulate | postprocess.aiProcess_GenSmoothNormals | AI_PROCESS_DEBONE | postprocess.aiProcess_PreTransformVertices):
-    """Load FBX model using pyassimp.
-    
-    Returns list of mesh dicts with vertices, normals, uvs, indices, and material info.
-    
-    Uses aiProcess_Debone to remove bones (avoids bone pointer issues)
-    and aiProcess_PreTransformVertices to bake node transforms.
-    """
-    abs_path = os.path.abspath(path)
-    
-    # Import the scene - pyassimp.load returns a context manager
-    with pyassimp.load(abs_path, processing=flags) as scene:
-        
-        if not scene:
-            raise RuntimeError(f'pyassimp failed to import {path}')
-        
-        meshes = []
-        
-        # Material names will be resolved from JSON files in mod.py
-        # Here we just use material_0, material_1, etc. as placeholders
-        # The actual texture mapping happens in mod.py using material_index
-        material_names = [f"material_{i}" for i in range(len(scene.materials))]
-        
-        print(f"[Vesna FBX] Loaded {len(scene.meshes)} meshes, {len(scene.materials)} materials")
-        
-        # Process each mesh in the scene
-        for mesh in scene.meshes:
-            nv = len(mesh.vertices)
-            
-            # Vertices (already transformed by PreTransformVertices if used)
-            verts = np.array(mesh.vertices, dtype=np.float32)
-            
-            # Normals
-            norms = None
-            if mesh.normals is not None and len(mesh.normals) > 0:
-                norms = np.array(mesh.normals, dtype=np.float32)
-            
-            # UV coordinates - get first UV channel
-            all_uvs = {}
-            if mesh.texturecoords is not None:
-                for ch, uv_channel in enumerate(mesh.texturecoords):
-                    if uv_channel is not None and len(uv_channel) > 0:
-                        # Take only x,y components for 2D UVs
-                        uv_data = np.array([[uv[0], uv[1]] for uv in uv_channel], dtype=np.float32)
-                        all_uvs[ch] = uv_data
-            
-            primary_uvs = all_uvs.get(0, None)
-            
-            # Face indices - pyassimp returns numpy arrays for faces
-            # Each face is already a numpy array of indices
-            indices = []
-            for face in mesh.faces:
-                # In pyassimp, face is already a numpy array of indices
-                for idx in face:
-                    indices.append(idx)
-            indices = np.array(indices, dtype=np.uint32)
-            
-            # Material info - use material index to look up name
-            mat_idx = mesh.materialindex
-            if mat_idx >= len(material_names):
-                mat_idx = 0
-            mat_name = material_names[mat_idx]
-            
-            meshes.append({
-                'vertices': verts,
-                'normals': norms,
-                'uvs': primary_uvs,
-                'all_uvs': all_uvs,
-                'indices': indices,
-                'num_vertices': nv,
-                'num_faces': len(mesh.faces),
-                'material_index': mat_idx,
-                'material_name': mat_name,
-            })
-        
-        return meshes
->>>>>>> 21f9a7d42d7e7076c2c7499aaa45451262efb8a5

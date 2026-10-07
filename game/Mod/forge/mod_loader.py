@@ -24,6 +24,8 @@ from collections import defaultdict
 import pyglet
 from OpenGL.GL import *
 
+from functions import realize_icon
+
 
 class EventBus:
     def __init__(self, loader=None):
@@ -127,9 +129,7 @@ class ForgeAPI:
         self.scene.texture[name] = pyglet.graphics.TextureGroup(texture)
 
         icon = pyglet.image.load(texture_path)
-        icon.width = 22
-        icon.height = 22
-        self.scene.inventory_textures[name] = icon
+        self.scene.inventory_textures[name] = realize_icon(icon, 22, 22)
 
         previous_stack = Items.CUSTOM_STACK_SIZES.get(name)
         was_non_block = name in Items.NON_BLOCK_ITEMS
@@ -161,9 +161,7 @@ class ForgeAPI:
         self.scene.texture[name] = groups[0]
 
         icon = pyglet.image.load(texture_paths[3])
-        icon.width = 22
-        icon.height = 22
-        self.scene.inventory_textures[name] = icon
+        self.scene.inventory_textures[name] = realize_icon(icon, 22, 22)
         if block_type == "alpha":
             already_alpha = name in self.scene.mod_alpha_textures
             self.loader._record_undo(lambda: self._restore_alpha(name, already_alpha))
@@ -250,9 +248,7 @@ class ForgeAPI:
         self.scene.texture[name] = pyglet.graphics.TextureGroup(texture)
 
         icon = pyglet.image.ImageData(width, height, "RGBA", pixels, pitch=-width * 4)
-        icon.width = 22
-        icon.height = 22
-        self.scene.inventory_textures[name] = icon
+        self.scene.inventory_textures[name] = realize_icon(icon, 22, 22)
 
         self.scene.spawn_egg_items[name] = entity_id
         self.events.post("spawn_egg_registered", entity_id=entity_id, item_name=name)

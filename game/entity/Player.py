@@ -7,6 +7,7 @@ from functions import roundPos
 from game.blocks.DestroyBlock import DestroyBlock
 from game.Items import attack_damage, attack_speed, is_item, is_tool
 from settings import *
+import settings
 
 class Player:
     WALK_SPEED = 4.317
@@ -16,12 +17,15 @@ class Player:
     HEIGHT = 1.8
     FEET_OFFSET = PLAYER_EYE_HEIGHT
     JUMP_VELOCITY = 3.8
+    # items that emit light while held (OptiFine dynamic lights)
+    HAND_LIGHT_ITEMS = ("torch",)
 
     def __init__(self, x=0, y=0, z=0, rotation=None, gl=None):
         if rotation is None:
             rotation = [0, 0]
         print("Init Player class...")
         self.is_spectator = False
+        self.is_creative = False
         self.in_water = False
         self.position, self.rotation = [x, y, z], rotation
         self.speed = self.WALK_SPEED
@@ -52,6 +56,8 @@ class Player:
         self.bInAir = False
         self.playerDead = False
         self.inventory = None
+        # cell currently lit by the held item (dynamic lights)
+        self._hand_light_cell = None
 
         self.lastPlayerPosOnGround = [0, 0, 0]
         self.playerFallY = 0
@@ -63,6 +69,7 @@ class Player:
         self.position = list(position)
         self.rotation = [0, 0]
         self.is_spectator = False
+        self.is_creative = False
         self.in_water = False
         self.speed = self.WALK_SPEED
         self.dy = 0
@@ -86,6 +93,9 @@ class Player:
         self.hp = -1
         self.bInAir = False
         self.playerDead = False
+        # a fresh world means a fresh Light; the hand-light cell must not
+        # leak into the new light source set
+        self._hand_light_cell = None
         self.lastPlayerPosOnGround = self.position.copy()
         self.playerFallY = 0
         self.gl.allowEvents["collisions"] = True
@@ -96,10 +106,34 @@ class Player:
         fps = max(MAX_FPS, 30)
         return min(max(1.0 / fps, 0.016), 0.05)
 
+    THIRD_PERSON_DISTANCE = 4.0
+
+    @staticmethod
+    def third_person_angles(rotation, camera_type):
+        """View transform parameters for the camera, pure and testable.
+
+        Returns ``(pitch_deg, yaw_deg, pull_back)``. Type 1 is first person;
+        type 2 sits behind the player looking forward (the vanilla rear view);
+        type 3 sits in front looking back at the player (the vanilla front
+        view), which mirrors the yaw and pitch.
+        """
+        if camera_type == 2:
+            return rotation[0], rotation[1], Player.THIRD_PERSON_DISTANCE
+        if camera_type == 3:
+            return -rotation[0], rotation[1] + 180.0, Player.THIRD_PERSON_DISTANCE
+        return rotation[0], rotation[1], 0.0
+
     def updateView(self):
         """Apply the player's view transformation (camera). No push/pop – caller handles it."""
-        glRotatef(self.rotation[0], 1, 0, 0)
-        glRotatef(self.rotation[1], 0, 1, 0)
+        pitch, yaw, back = self.third_person_angles(self.rotation, self.cameraType)
+        # The pullback translate must be OUTERMOST (called first in view
+        # space), so it moves the camera along the rotated view axis instead
+        # of a fixed world axis; placing it after the rotations puts the
+        # camera on the wrong side of the player.
+        if back:
+            glTranslatef(0.0, 0.0, -back)
+        glRotatef(pitch, 1, 0, 0)
+        glRotatef(yaw, 0, 1, 0)
         glTranslatef(-self.position[0],
                      -self.position[1] + self.shift + self.cameraShake[0],
                      -self.position[2])
@@ -294,7 +328,8 @@ class Player:
     def hurt(self, amount, source="generic", attacker=None):
         """Minecraft-style damage with ten ticks of invulnerability."""
         source = str(source)
-        if ((self.is_spectator and source != "void") or self.playerDead or self.hp <= 0
+        if (((self.is_spectator or self.is_creative) and source != "void")
+                or self.playerDead or self.hp <= 0
                 or (getattr(self, "spawn_protection", 0.0) > 0 and source != "void")):
             return False
         amount = max(0.0, float(amount))
@@ -735,3 +770,32 @@ class Player:
 
     def update(self, dt):
         self.updatePosition(dt)
+        self.update_hand_light()
+
+    def update_hand_light(self):
+        """OptiFine-style dynamic light: a held torch lights the world.
+
+        The light source follows the player block-by-block and is removed
+        when the item leaves the hand, the player dies or the Dynamic
+        Lighting setting is switched off. Reads ``settings.DYNAMIC_LIGHTING``
+        live so the menu toggle takes effect immediately.
+        """
+        light = getattr(self.gl, "light", None)
+        inventory = getattr(self, "inventory", None)
+        if light is None or inventory is None:
+            return
+
+        cell = None
+        if settings.DYNAMIC_LIGHTING and not self.playerDead:
+            stack = inventory.inventory.get(inventory.activeInventory, ["", 0])
+            if stack[1] > 0 and stack[0] in self.HAND_LIGHT_ITEMS:
+                cell = roundPos((self.position[0], self.position[1],
+                                 self.position[2]))
+
+        if cell == self._hand_light_cell:
+            return
+        if self._hand_light_cell is not None:
+            light.removeLightSource(*self._hand_light_cell)
+        self._hand_light_cell = cell
+        if cell is not None:
+            light.addLightSource(*cell)
