@@ -227,10 +227,11 @@ class MyEntity(PassiveMob):
 - **密度场**：FBM 基形 + Worley 细胞结构混合；`uDetail≥1` 用高频 Worley 沿边缘侵蚀（`1-density` 加权 → 厚核不散、边缘成絮）
 - **光照（UE 风格近似）**：向阳光的 Beer-Lambert 二次行进自遮蔽（`uSunSamples` 次采样，光深>2 早停）；双瓣 Henyey-Greenstein 相位（前向强散射 + 向后弱瓣，`hgPhase` 分母有 epsilon 保护）；Powder 项防"棉花球"扁平化；`skyColor` 环境项近似一拍多重散射
 - **采样纪律**：IGN（interleaved-gradient-noise）抖动把条带变成高频噪声；自适应步进（空旷处步长 ×3）；透射率 <0.02 早停
-- **质量分级 `settings.CLOUD_QUALITY`**（POTATO/LOW/MEDIUM/HIGH/GPU，`Clouds.QUALITY_PARAMS` 表驱动）：POTATO 完全跳过 raymarch；GPU = 32 步 + 8 阳光采样 + 全部特性。菜单中 GPU 显示为红色 `I PAID FOR THE WHOLE GPU!`
+- **质量分级 `settings.CLOUD_QUALITY`**（POTATO/LOW/MEDIUM/HIGH/GPU，`Clouds.QUALITY_PARAMS` 表驱动）：**五档全部 raymarch**（POTATO=4步/1阳光采样最便宜，GPU=32步+8采样+全部特性）；billboard 云团仅作 volume shader 不可用时的回落（实测 billboard 路径 ~6.3ms/帧 CPU——瓶颈是 ~782 个即时模式 quad 的 PyOpenGL 提交（90%），列表构建 0.57ms、排序仅 0.09ms，勿盲删排序）。菜单中 GPU 显示为红色 `I PAID FOR THE WHOLE GPU!`
 - quality 通过 uniform 驱动（`uSteps/uSunSamples/uDetail/uPowder/uAdaptive/uDualLobe`），**无需重编译**；`Scene.resetScene()` 重建后 `set_quality(game_settings.CLOUD_QUALITY)` 应用
 - **半分辨率渲染（UE 标准优化）**：LOW/MEDIUM/HIGH 在 `(W/2, H/2)` FBO 中 raymarch，LINEAR 上采样合成到天空（`resolution_scale=0.5`）；GPU 档全分辨率。FBO 按需重建（窗口 resize 检测尺寸变化），`close()` 释放；FBO 不完整时自动回落直渲
 - 暂未实现的时间重投影：需要运动向量 + 历史缓冲基建，当前由"半分辨率 × 采样分级"承担性能伸缩
+- **实测数据（GL 4.6 compat + GL_TIME_ELAPSED timer query，-60° 云最重视角，854×480 窗口，AMD Radeon 集显）**：GPU 时间 POTATO 0.68ms / LOW 1.30ms / MEDIUM 5.96ms / HIGH 12.15ms / GPU 21.07ms；地平线视角更低（MEDIUM ≈3.4ms CPU 全链路）。IGN 抖动为**静态逐像素**（移除了每帧时变项，消除噪点爬行）
 
 ### 5.7 性能管线（>120 FPS 目标）
 

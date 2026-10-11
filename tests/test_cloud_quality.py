@@ -22,15 +22,27 @@ class CloudQualityTests(unittest.TestCase):
         self.assertEqual(_normalize_cloud_quality("banana"), "HIGH")
         self.assertEqual(_normalize_cloud_quality(None), "HIGH")
 
-    def test_potato_uses_the_billboard_fallback(self):
-        # POTATO must skip the raymarch entirely.
-        self.assertIsNone(Clouds.QUALITY_PARAMS["POTATO"])
+    def test_potato_is_the_cheapest_raymarch_tier(self):
+        """POTATO raymarches (measured: the billboard puffs it used to use
+        cost ~6.3 ms/frame CPU - 90 % of it immediate-mode submission -
+        while the LOW march costs 0.82 ms total). It must stay the cheapest
+        march, and the puffs remain only as the no-shader fallback."""
+        params = Clouds.QUALITY_PARAMS
+        potato = params["POTATO"]
+        self.assertIsNotNone(potato)
+        for key in ("steps", "sun_samples", "detail", "powder",
+                    "adaptive", "dual_lobe", "resolution_scale"):
+            self.assertIn(key, potato)
+        self.assertLessEqual(potato["steps"], params["LOW"]["steps"])
+        self.assertLessEqual(potato["sun_samples"], params["LOW"]["sun_samples"])
+        self.assertLessEqual(potato["resolution_scale"],
+                             params["LOW"]["resolution_scale"])
 
     def test_tiers_scale_up_monotonically(self):
         params = Clouds.QUALITY_PARAMS
-        steps = [params[q]["steps"] for q in ("LOW", "MEDIUM", "HIGH", "GPU")]
-        sun_samples = [params[q]["sun_samples"]
-                       for q in ("LOW", "MEDIUM", "HIGH", "GPU")]
+        tiers = ("POTATO", "LOW", "MEDIUM", "HIGH", "GPU")
+        steps = [params[q]["steps"] for q in tiers]
+        sun_samples = [params[q]["sun_samples"] for q in tiers]
         self.assertEqual(steps, sorted(steps))
         self.assertEqual(sun_samples, sorted(sun_samples))
         # LOW is the cheap tier: no powder or dual-lobe phase.
@@ -50,16 +62,15 @@ class CloudQualityTests(unittest.TestCase):
         clouds.set_quality("banana")
         self.assertEqual(clouds.quality, "MEDIUM")
         clouds.set_quality("POTATO")
-        self.assertIsNone(clouds._params)
+        self.assertEqual(clouds._params["steps"], 4)
 
     def test_playable_tiers_render_at_half_resolution(self):
         params = Clouds.QUALITY_PARAMS
-        # the affordable tiers raymarch at half res; only the cinematic
-        # "I PAID FOR THE WHOLE GPU!" tier runs at full resolution
-        self.assertEqual(params["LOW"]["resolution_scale"], 0.5)
-        self.assertEqual(params["MEDIUM"]["resolution_scale"], 0.5)
-        self.assertEqual(params["HIGH"]["resolution_scale"], 0.5)
-        self.assertEqual(params["GPU"]["resolution_scale"], 1.0)
+        # every tier raymarches behind the half-resolution guard: a 0.75
+        # scale for the GPU tier still measured 45 ms GPU/frame at a
+        # cloud-heavy view angle on integrated Radeon graphics
+        for tier in ("POTATO", "LOW", "MEDIUM", "HIGH", "GPU"):
+            self.assertEqual(params[tier]["resolution_scale"], 0.5)
 
     def test_vsync_setting_loads_as_a_bool(self):
         # vsync off is what uncaps the frame rate above the monitor refresh;

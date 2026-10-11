@@ -17,8 +17,9 @@ participating medium, in the spirit of Unreal Engine's volumetric clouds:
   once transmittance falls below threshold.
 
 Quality tiers (``settings.CLOUD_QUALITY``) scale the sample counts and the
-feature set; ``POTATO`` skips the raymarch entirely and uses classic layered
-billboard puffs instead.
+feature set. ``POTATO`` is the cheapest practical march (4 steps, one light
+sample); the billboard puffs remain only as the fallback for contexts where
+the volume shader is unavailable.
 """
 
 import logging
@@ -225,10 +226,12 @@ void main() {
 
     float baseStep = (farDistance - nearDistance) / max(uSteps, 1.0);
 
-    // Interleaved gradient noise jitter: banding becomes high-frequency noise.
+    // Interleaved gradient noise jitter: banding becomes high-frequency
+    // noise. The offset is STATIC per pixel - a per-frame term made the
+    // grain crawl frame-to-frame; temporal averaging would need a history
+    // buffer this renderer does not have.
     vec2 pixel = screenUv * vec2(512.0);
-    float jitter = fract(52.9829189 * fract(dot(pixel, vec2(0.06711056, 0.00583715)))
-                         + fract(gameTime * 7.31)) * baseStep;
+    float jitter = fract(52.9829189 * fract(dot(pixel, vec2(0.06711056, 0.00583715)))) * baseStep;
     float distanceAlongRay = nearDistance + jitter;
 
     float transmittance = 1.0;
@@ -328,13 +331,20 @@ class Clouds:
     GRID_SPACING = 40.0
     WIND_SPEED = 1.5
 
-    # Volumetric parameters per quality tier; POTATO skips the raymarch and
-    # uses the billboard-puff fallback. GPU is the cinematic tier: full
-    # multiple-scattering dual-lobe lighting with dense sun sampling at full
-    # resolution; the playable tiers render at half resolution and are
-    # bilinearly upsampled, the standard volumetric-cloud optimisation.
+    # Volumetric parameters per quality tier. Every preset raymarches;
+    # POTATO is the cheapest practical march. The billboard puffs are only
+    # the fallback when the volume shader is unavailable (measured: the
+    # puff path costs ~6.3 ms/frame CPU on the dev iGPU - ~782 immediate-
+    # mode quads dominate - while the cheapest march costs 0.68 ms GPU).
+    # GPU is the cinematic tier: the full feature set (32 steps, 8 sun
+    # samples, dual-lobe phase, powder) behind the half-resolution guard -
+    # a 0.75 scale still measured 45 ms GPU/frame on integrated Radeon
+    # graphics at a cloud-heavy view angle, so the tier keeps its maximum
+    # sampling but not a pathological pixel count.
     QUALITY_PARAMS = {
-        "POTATO": None,
+        "POTATO": {"steps": 4,  "sun_samples": 1, "detail": 0,
+                   "powder": 0, "adaptive": 1, "dual_lobe": 0,
+                   "resolution_scale": 0.5},
         "LOW":    {"steps": 8,  "sun_samples": 1, "detail": 0,
                    "powder": 0, "adaptive": 1, "dual_lobe": 0,
                    "resolution_scale": 0.5},
@@ -346,7 +356,7 @@ class Clouds:
                    "resolution_scale": 0.5},
         "GPU":    {"steps": 32, "sun_samples": 8, "detail": 2,
                    "powder": 1, "adaptive": 1, "dual_lobe": 1,
-                   "resolution_scale": 1.0},
+                   "resolution_scale": 0.5},
     }
 
     def __init__(self, gl):
