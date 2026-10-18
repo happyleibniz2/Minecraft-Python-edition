@@ -1,6 +1,19 @@
 {
-    "id": "paimon",
-    "version": "1.0.0",
-    "dependencies": [],
-    "entry": "mod.py"
+  "id": "paimon",
+  "version": "1.0.0",
+  "dependencies": [],
+  "entry": "mod.py",
+  "texture_map": {
+    "NPC_Kanban_Paimon_Mat_Body": "NPC_Kanban_Paimon_Tex_Body_Diffuse.png",
+    "NPC_Kanban_Paimon_Mat_Hair": "NPC_Kanban_Paimon_Tex_Hair_Diffuse.png",
+    "NPC_Kanban_Paimon_Mat_Cloak": "NPC_Kanban_Paimon_Tex_Cloak_Diffuse.png",
+    "NPC_Kanban_Paimon_Mat_Face": "NPC_Kanban_Paimon_Tex_Face_Diffuse.png",
+    "miHoYoDiffuse": "NPC_Kanban_Paimon_Tex_Face_Diffuse.png"
+  },
+  "uv_channel": 0,
+  "uv_flip_v": false,
+  "model_scale": 2.0,
+  "ground_offset": -1.25,
+  "model_rotation_y": 180.0,
+  "model_offset": 0.0
 }

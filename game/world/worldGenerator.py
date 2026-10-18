@@ -14,6 +14,7 @@ class worldGenerator:
     SEA_LEVEL = SEA_LEVEL
     GENERATION_RADIUS = CHUNKS_RENDER_DISTANCE
     BACKGROUND_GENERATION_RADIUS = 64
+    QUEUE_RECENTER_DISTANCE = 16
 
     def __init__(self, glClass, seed=43242):
         self.seed = seed
@@ -96,14 +97,10 @@ class worldGenerator:
             if deadline is not None and time.perf_counter() >= deadline:
                 break
 
-        block_budget = max_blocks_per_call
-        blocks_loaded = 0
-        while self.loading and block_budget > 0:
-            p, t = self.loading.popleft()
-            if p not in self.gl.cubes.cubes:
-                self.gl.cubes.add(p, t)
-                blocks_loaded += 1
-            block_budget -= 1
+        pending_blocks = []
+        for _ in range(min(max_blocks_per_call, len(self.loading))):
+            pending_blocks.append(self.loading.popleft())
+        blocks_loaded = self.gl.cubes.add_generated_batch(pending_blocks)
         return columns_generated, blocks_loaded
 
     @property
@@ -116,6 +113,15 @@ class worldGenerator:
                   math.floor(position[2] / size_z) * size_z)
         if center == self._last_queue_center:
             return
+        if self._last_queue_center is not None:
+            dx = center[0] - self._last_queue_center[0]
+            dz = center[1] - self._last_queue_center[1]
+            if dx * dx + dz * dz < self.QUEUE_RECENTER_DISTANCE ** 2:
+                # Re-sorting every queued origin after a one-section movement
+                # costs more than the terrain work it reprioritises. The
+                # background radius is 64 blocks, so a 16-block hysteresis
+                # keeps nearby requests valid while removing that churn.
+                return
         self._last_queue_center = center
         desired = set()
         radius = self.GENERATION_RADIUS
@@ -326,27 +332,36 @@ class worldGenerator:
         selector = self._random_at(x // 2, y // 2, z // 2, 0x0AE)
         if self._random_at(x, y, z, 0x0AF) >= 0.72:
             return None
-        candidates = []
+        cumulative = 0.0
         if y <= 16:
             depth_factor = self._clamp((16 - y) / 80, 0.0, 1.0)
-            candidates.extend((("diamond_ore", 0.0015 + depth_factor * 0.007),
-                               ("redstone_ore", 0.002 + depth_factor * 0.008)))
+            cumulative += 0.0015 + depth_factor * 0.007
+            if selector < cumulative:
+                return "diamond_ore"
+            cumulative += 0.002 + depth_factor * 0.008
+            if selector < cumulative:
+                return "redstone_ore"
         if y <= 32:
-            candidates.append(("gold_ore", 0.004))
+            cumulative += 0.004
+            if selector < cumulative:
+                return "gold_ore"
         iron_factor = self._clamp(1.0 - abs(y - 16) / 96, 0.0, 1.0)
-        candidates.append(("iron_ore", 0.002 + iron_factor * 0.012))
+        cumulative += 0.002 + iron_factor * 0.012
+        if selector < cumulative:
+            return "iron_ore"
         lapis_factor = self._clamp(1.0 - abs(y) / 64, 0.0, 1.0)
-        candidates.append(("lapis_ore", lapis_factor * 0.005))
+        cumulative += lapis_factor * 0.005
+        if selector < cumulative:
+            return "lapis_ore"
         coal_factor = self._clamp(1.0 - abs(y - 96) / 128, 0.0, 1.0)
-        candidates.append(("coal_ore", coal_factor * 0.014))
+        cumulative += coal_factor * 0.014
+        if selector < cumulative:
+            return "coal_ore"
         if (-16 <= y <= 256
                 and (biome_name or self.sample_biome(x, z)) in ("mountains", "big_mountains")):
-            candidates.append(("emerald_ore", 0.004))
-        cumulative = 0.0
-        for ore, chance in candidates:
-            cumulative += chance
+            cumulative += 0.004
             if selector < cumulative:
-                return ore
+                return "emerald_ore"
         return None
 
     UNSAFE_GROUND = ("water", "lava", "cactus", "tnt")

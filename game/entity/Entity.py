@@ -15,7 +15,6 @@ class Entity:
         self.height = 1.8
         self.pick_radius = 0.1
         self.dy = 0
-        print("doing some buggy things in the Entity class...")
         self.position = [0, 100, 0]
         self.rotation = [0, 0, 0]
         self.gravity = 5.8
@@ -24,7 +23,7 @@ class Entity:
         self.lastPlayerPosOnGround = [0, 0, 0]
         self.playerFallY = 0
         self.kW, self.kS, self.kA, self.kD = 0, 0, 0, 0
-        self.gl.allowEvents["collisions"] = True
+        self.gl.allowEvents.setdefault("collisions", True)
         self.speed = 0.02
         self.model = Model(gl)
 

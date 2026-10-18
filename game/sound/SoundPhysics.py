@@ -23,7 +23,9 @@ class SoundPhysics:
         dz = source[2] - player.position[2]
         distance = math.sqrt(dx * dx + dy * dy + dz * dz)
         if distance >= max_distance:
-            channel.set_volume(0.0, 0.0)
+            # one-argument form: the two-argument set_volume is broken on
+            # pygame 2.6.1 (see the note further down)
+            channel.set_volume(0.0)
             return channel
 
         gain = (1.0 - distance / max_distance) ** 2
@@ -39,9 +41,15 @@ class SoundPhysics:
             gain *= 0.35
 
         gain *= volume
-        left = gain * (1.0 - max(0.0, pan) * 0.72)
-        right = gain * (1.0 + min(0.0, pan) * 0.72)
-        channel.set_volume(max(0.0, left), max(0.0, right))
+        # left = gain * (1.0 - max(0.0, pan) * 0.72)
+        # right = gain * (1.0 + min(0.0, pan) * 0.72)
+        # pygame 2.6.1 (SDL3 mixer) regression: the two-argument
+        # set_volume(left, right) resets the channel's master volume to 1.0,
+        # so every positional sound played at full volume regardless of
+        # distance (the "step sounds everywhere" bug). Use the reliable
+        # one-argument master gain; stereo panning returns once pygame
+        # fixes the two-argument form.
+        channel.set_volume(max(0.0, min(1.0, gain)))
         return channel
 
     def _is_occluded(self, listener, source, distance):

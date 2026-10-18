@@ -103,23 +103,66 @@ class PerlinNoise(threading.Thread):
         return (u if h & 1 else -u) + (v if h & 2 else -v)
 
     def noise(self, x, y, z=0):
-        p, fade, lerp, grad = self.p, self.fade, self.lerp, self.grad
+        """Sample 3D Perlin noise without per-sample helper dispatch."""
+        p = self.p
         xf, yf, zf = math.floor(x), math.floor(y), math.floor(z)
         X, Y, Z = xf % self.m, yf % self.m, zf % self.m
         x -= xf
         y -= yf
         z -= zf
-        u, v, w = fade(x), fade(y), fade(z)
+        u = x * x * x * (x * (x * 6 - 15) + 10)
+        v = y * y * y * (y * (y * 6 - 15) + 10)
+        w = z * z * z * (z * (z * 6 - 15) + 10)
         A = p[X] + Y
         AA = p[A] + Z
         AB = p[A + 1] + Z
         B = p[X + 1] + Y
         BA = p[B] + Z
         BB = p[B + 1] + Z
-        return lerp(w, lerp(v, lerp(u, grad(p[AA], x, y, z), grad(p[BA], x - 1, y, z)),
-                            lerp(u, grad(p[AB], x, y - 1, z), grad(p[BB], x - 1, y - 1, z))),
-                    lerp(v, lerp(u, grad(p[AA + 1], x, y, z - 1), grad(p[BA + 1], x - 1, y, z - 1)),
-                         lerp(u, grad(p[AB + 1], x, y - 1, z - 1), grad(p[BB + 1], x - 1, y - 1, z - 1))))
+
+        x1, y1, z1 = x - 1, y - 1, z - 1
+
+        h = p[AA] & 15
+        gu = y if h & 8 else x
+        gv = (x if h == 12 or h == 14 else z) if h & 12 else y
+        g000 = (gu if h & 1 else -gu) + (gv if h & 2 else -gv)
+        h = p[BA] & 15
+        gu = y if h & 8 else x1
+        gv = (x1 if h == 12 or h == 14 else z) if h & 12 else y
+        g100 = (gu if h & 1 else -gu) + (gv if h & 2 else -gv)
+        h = p[AB] & 15
+        gu = y1 if h & 8 else x
+        gv = (x if h == 12 or h == 14 else z) if h & 12 else y1
+        g010 = (gu if h & 1 else -gu) + (gv if h & 2 else -gv)
+        h = p[BB] & 15
+        gu = y1 if h & 8 else x1
+        gv = (x1 if h == 12 or h == 14 else z) if h & 12 else y1
+        g110 = (gu if h & 1 else -gu) + (gv if h & 2 else -gv)
+
+        h = p[AA + 1] & 15
+        gu = y if h & 8 else x
+        gv = (x if h == 12 or h == 14 else z1) if h & 12 else y
+        g001 = (gu if h & 1 else -gu) + (gv if h & 2 else -gv)
+        h = p[BA + 1] & 15
+        gu = y if h & 8 else x1
+        gv = (x1 if h == 12 or h == 14 else z1) if h & 12 else y
+        g101 = (gu if h & 1 else -gu) + (gv if h & 2 else -gv)
+        h = p[AB + 1] & 15
+        gu = y1 if h & 8 else x
+        gv = (x if h == 12 or h == 14 else z1) if h & 12 else y1
+        g011 = (gu if h & 1 else -gu) + (gv if h & 2 else -gv)
+        h = p[BB + 1] & 15
+        gu = y1 if h & 8 else x1
+        gv = (x1 if h == 12 or h == 14 else z1) if h & 12 else y1
+        g111 = (gu if h & 1 else -gu) + (gv if h & 2 else -gv)
+
+        lower = (g000 + u * (g100 - g000))
+        upper = (g010 + u * (g110 - g010))
+        front = lower + v * (upper - lower)
+        lower = (g001 + u * (g101 - g001))
+        upper = (g011 + u * (g111 - g011))
+        back = lower + v * (upper - lower)
+        return front + w * (back - front)
 
 
 class NoiseGeneratorPerlin:  # Used in Normal Minecraft

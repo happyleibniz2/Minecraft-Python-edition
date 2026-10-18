@@ -1,7 +1,26 @@
 ```
-# Compiled and build artifacts
-*.fsh
-*.vsh
-```
-/logs
+# Python
+__pycache__/
 *.pyc
+*.pyo
+*.pyd
+
+# Build and distribution artifacts
+dist/
+build/
+*.egg-info/
+
+# Virtual environments
+venv/
+.venv/
+env/
+.ENV/
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.swp
+*~
+```

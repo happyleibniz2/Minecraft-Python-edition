@@ -47,6 +47,9 @@ class CubeHandler:
 
         # Conservative AABB frustum culling.
         self.frustum = Frustum()
+        # Separate extractor for the sun's orthographic shadow frustum, so
+        # shadow-map rebuilds never clobber the main view frustum.
+        self.shadow_frustum = Frustum()
 
     def _get_chunk_key(self, pos):
         x, y, z = pos
@@ -193,6 +196,69 @@ class CubeHandler:
         if mod_loader is not None:
             mod_loader.post("block_added", scene=self.gl, position=p, block=cube)
         return True
+
+    def add_generated_batch(self, blocks):
+        """Commit generated blocks while marking each render section once.
+
+        Terrain generation can enqueue thousands of blocks at a time. Calling
+        ``add`` for each one repeatedly increments the same section revision
+        and repeatedly dirties every boundary neighbour. Generation has no
+        player interaction or fluid simulation side effects, so it can safely
+        commit the same block data in one grouped operation.
+        """
+        cubes = self.cubes
+        collidable = self.collidable
+        fluids = self.fluids
+        render_chunks = self.render_chunks
+        block_data = self.block
+        alpha_textures = self.alpha_textures
+        dirty_keys = set()
+        added = 0
+
+        for p, name in blocks:
+            if p in cubes:
+                continue
+            if (name in ("torch", "tall_grass")
+                    and (p[0], p[1] - 1, p[2]) not in collidable):
+                continue
+
+            cube = Cube(name, p, block_data[name],
+                        self.block_render_type(name, alpha_textures))
+            cubes[p] = cube
+            if name not in ("water", "lava", "torch", "tall_grass"):
+                collidable[p] = cube
+            elif name == "water":
+                fluids[p] = FluidState(0, True, False)
+
+            chunk_key = self._get_chunk_key(p)
+            chunk = self._get_or_create_chunk(chunk_key)
+            # ``add_cube`` marks the section for every block. This method marks
+            # all affected sections once after the complete batch is inserted.
+            chunk.cubes[p] = cube
+            dirty_keys.add(chunk_key)
+
+            sx, sy, sz = self.RENDER_CHUNK_SIZE
+            local_x, local_y, local_z = p[0] % sx, p[1] % sy, p[2] % sz
+            cx, cy, cz = chunk_key
+            if local_x == 0:
+                dirty_keys.add((cx - 1, cy, cz))
+            elif local_x == sx - 1:
+                dirty_keys.add((cx + 1, cy, cz))
+            if local_y == 0:
+                dirty_keys.add((cx, cy - 1, cz))
+            elif local_y == sy - 1:
+                dirty_keys.add((cx, cy + 1, cz))
+            if local_z == 0:
+                dirty_keys.add((cx, cy, cz - 1))
+            elif local_z == sz - 1:
+                dirty_keys.add((cx, cy, cz + 1))
+            added += 1
+
+        for chunk_key in dirty_keys:
+            chunk = render_chunks.get(chunk_key)
+            if chunk is not None:
+                chunk.mark_dirty()
+        return added
 
     def remove(self, p):
         if p not in self.cubes:
@@ -727,15 +793,25 @@ class CubeHandler:
         self.visible_water_chunks = list(reversed(visible))
 
     def render_shadow(self, center, radius):
-        """Render nearby opaque chunk geometry into the sun/moon depth map."""
+        """Render nearby opaque chunk geometry into the sun/moon depth map.
+
+        The sun's orthographic frustum only covers a small box around the
+        player, so chunks outside it are culled exactly; the caller passes a
+        generous search radius and the frustum does the precise work.
+        """
         radius_squared = radius * radius
+        self.shadow_frustum.extract()
         for chunk in self._iter_chunks_near(center, radius):
             cx = chunk.cx * self.RENDER_CHUNK_SIZE[0] + self.RENDER_CHUNK_SIZE[0] / 2
             cz = chunk.cz * self.RENDER_CHUNK_SIZE[2] + self.RENDER_CHUNK_SIZE[2] / 2
             cy = chunk.cy * self.RENDER_CHUNK_SIZE[1] + self.RENDER_CHUNK_SIZE[1] / 2
             dx, dy, dz = cx - center[0], cy - center[1], cz - center[2]
-            if dx * dx + dy * dy + dz * dz <= radius_squared:
-                chunk.render_shadow()
+            if dx * dx + dy * dy + dz * dz > radius_squared:
+                continue
+            x0, y0, z0, x1, y1, z1 = self.chunk_bounds(chunk)
+            if not self.shadow_frustum.cube_in_frustum(x0, y0, z0, x1, y1, z1):
+                continue
+            chunk.render_shadow()
 
     def render_water(self):
         glPushAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
