@@ -60,6 +60,9 @@ uniform float coverage;
 uniform float weatherStrength;
 uniform float daylight;
 uniform float gameTime;
+uniform float sunHeight;      /* sin(sun_angle): the SAME sun driving the
+                                  sky and the shadow map; the twilight tint
+                                  is derived from its elevation */
 uniform float drawDistance;
 uniform float cloudBase;
 uniform float cloudTop;
@@ -138,7 +141,11 @@ float cloudDensity(vec3 world) {
     float anvil = mix(0.7, 1.3, smoothstep(0.1, 0.75, height));
 
     // Height gradient for volumetric depth (bottom darker, top brighter).
-    float heightGradient = smoothstep(0.0, 0.25, height) * smoothstep(1.0, 0.65, height);
+    // NOTE: written as (1 - smoothstep(0.65, 1.0, height)); the previous
+    // reversed form smoothstep(1.0, 0.65, height) is UNDEFINED in GLSL for
+    // edge0 >= edge1 even though common drivers happen to compute it.
+    float heightGradient = smoothstep(0.0, 0.25, height)
+                        * (1.0 - smoothstep(0.65, 1.0, height));
 
     vec3 samplePosition = vec3(
         (world.x + windOffset.x) * 0.006,
@@ -275,9 +282,13 @@ void main() {
             vec3 shadowColor = mix(
                 mix(nightCloud, vec3(0.35, 0.40, 0.50), daylight),
                 vec3(0.20, 0.24, 0.32), weatherStrength);
-            vec3 litBase = mix(dayCloud, sunsetCloud,
-                smoothstep(0.75, 0.85, fract(gameTime / 24.0)) *
-                (1.0 - smoothstep(0.83, 0.92, fract(gameTime / 24.0))));
+            /* Twilight tint follows the actual sun elevation (the previous
+               form keyed off fract(gameTime/24.0) - elapsed SECONDS - which
+               pulsed orange every 24 s of play and never fired at the real
+               dusk). |sunHeight| < 0.28 is the same horizon band the
+               DayNightCycle sky uses for its twilight colour. */
+            float twilight = 1.0 - smoothstep(0.0, 0.28, abs(sunHeight));
+            vec3 litBase = mix(dayCloud, sunsetCloud, twilight);
 
             float silverLining = pow(max(cosTheta, 0.0), 8.0) * shadowTransmittance;
             float lightTerm = shadowTransmittance * phase * 2.8 + silverLining * 0.8;
@@ -572,6 +583,9 @@ class Clouds:
         self._uniform3("cameraRight", right)
         self._uniform3("cameraUp", up)
         self._uniform3("sunDirection", cycle.light_direction)
+        # True sun elevation BEFORE the night flip light_direction gets: the
+        # twilight tint must key off the sun, not the moon vector.
+        self._uniform1("sunHeight", math.sin(cycle.sun_angle))
         self._uniform3("skyColor", cycle.zenith_color)
         self._uniform3("horizonColor", cycle.horizon_color)
         self._uniform2("windOffset", self.shadow_offset)
@@ -656,10 +670,10 @@ class Clouds:
             )
             names = (
                 "cameraPosition", "cameraForward", "cameraRight", "cameraUp",
-                "sunDirection", "skyColor", "horizonColor", "windOffset",
-                "aspectRatio", "tanHalfFov", "coverage", "weatherStrength",
-                "daylight", "gameTime", "drawDistance", "cloudBase", "cloudTop",
-                "uSteps", "uSunSamples", "uDetail",
+                "sunDirection", "sunHeight", "skyColor", "horizonColor",
+                "windOffset", "aspectRatio", "tanHalfFov", "coverage",
+                "weatherStrength", "daylight", "gameTime", "drawDistance",
+                "cloudBase", "cloudTop", "uSteps", "uSunSamples", "uDetail",
                 "uPowder", "uAdaptive", "uDualLobe",
             )
             self.volume_uniforms = {

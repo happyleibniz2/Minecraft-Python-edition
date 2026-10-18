@@ -231,6 +231,9 @@ class MyEntity(PassiveMob):
 - quality 通过 uniform 驱动（`uSteps/uSunSamples/uDetail/uPowder/uAdaptive/uDualLobe`），**无需重编译**；`Scene.resetScene()` 重建后 `set_quality(game_settings.CLOUD_QUALITY)` 应用
 - **半分辨率渲染（UE 标准优化）**：LOW/MEDIUM/HIGH 在 `(W/2, H/2)` FBO 中 raymarch，LINEAR 上采样合成到天空（`resolution_scale=0.5`）；GPU 档全分辨率。FBO 按需重建（窗口 resize 检测尺寸变化），`close()` 释放；FBO 不完整时自动回落直渲
 - 暂未实现的时间重投影：需要运动向量 + 历史缓冲基建，当前由"半分辨率 × 采样分级"承担性能伸缩
+- **C++ 数学审计（`cpp/cloud_math.cpp`，MSVC 单精度镜像 GLSL 语义，`cpp\build_and_run.cmd` 构建运行）**：hash31 统计/噪声范围/HG 相位对双精度参考逐点吻合/行进不变量（透射率单调非增）全部验证；发现并修复两个真实 bug：
+  - **日落染色时钟错误** — 原用 `fract(gameTime/24)`（elapsed 秒！）：60 秒内错误脉冲 2 次、真黄昏（day fraction 0.5）反而为 0；现按 `sunHeight`（`sin(sun_angle)`，与天空/阴影同一太阳）推导 twilight：`1 - smoothstep(0, 0.28, |sunHeight|)`，黄昏/黎明触发、正午/午夜关闭（GL 像素验证：dusk 比 noon 暖 +5.35 R−B）
+  - **反向 smoothstep** — `smoothstep(1.0, 0.65, h)` 在 GLSL spec 中 edge0≥edge1 为 undefined（驱动碰巧算对）；改为等价的 `1 - smoothstep(0.65, 1.0, h)`
 - **实测数据（GL 4.6 compat + GL_TIME_ELAPSED timer query，-60° 云最重视角，854×480 窗口，AMD Radeon 集显）**：GPU 时间 POTATO 0.68ms / LOW 1.30ms / MEDIUM 5.96ms / HIGH 12.15ms / GPU 21.07ms；地平线视角更低（MEDIUM ≈3.4ms CPU 全链路）。IGN 抖动为**静态逐像素**（移除了每帧时变项，消除噪点爬行）
 
 ### 5.7 性能管线（>120 FPS 目标）
