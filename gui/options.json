@@ -3,7 +3,8 @@
   "player_shadows": true,
   "leaves_sway": true,
   "shadow_quality": "HIGH",
-  "anti_aliasing": true,
+  "cloud_quality": "ULTRA",
+  "anti_aliasing": false,
   "dynamic_lighting": true,
   "difficulty": "EASY",
   "sound_volume": 0.01

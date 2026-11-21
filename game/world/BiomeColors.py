@@ -16,6 +16,12 @@ double-darkening the artwork.
 
 import os
 
+# Must run before the lazy ``import pyglet`` further down: pyglet 2.x otherwise
+# creates a hidden 1x1 shadow window and a second GL context, and the game must
+# own exactly one window/context.
+import pyglet
+pyglet.options['shadow_window'] = False
+
 from game.world.Biomes import all_biomes
 
 # temperature / downfall per biome, mirroring Minecraft's biome definitions

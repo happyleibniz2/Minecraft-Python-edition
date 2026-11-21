@@ -1,6 +1,11 @@
+import logging
 import time
 
+# Must run before pyglet.text/pyglet.font are imported: pyglet 2.x otherwise
+# creates a hidden 1x1 shadow window and a second GL context, and the game
+# must own exactly one window/context.
 import pyglet
+pyglet.options['shadow_window'] = False
 from settings import *
 
 
@@ -24,6 +29,7 @@ class GUI:
                                      color=(255, 255, 255, self.lopacity),
                                      font_size=12,
                                      x=self.gl.WIDTH // 2 - 2, y=90 + 2, anchor_x='center')
+        logging.debug("GUI labels initialized")
 
     def showText(self, text):
         self.lbl.text = text
@@ -50,8 +56,15 @@ class GUI:
         elif self.lopacity:
             self.hideText()
 
-        for i in self.shows.values():
-            i[0].blit(*i[1])
+        for texture, position in self.shows.values():
+            x, y = position
+            # Hidden elements (e.g. the crosshair parked at -100,-100 while a
+            # modal window is open) used to issue an off-screen quad every
+            # frame.  Skip them entirely instead.
+            if (x + texture.width <= 0 or y + texture.height <= 0
+                    or x >= self.gl.WIDTH or y >= self.gl.HEIGHT):
+                continue
+            texture.blit(x, y)
 
     def addGuiElement(self, image, pos):
         self.shows[image] = [self.GUI_TEXTURES[image], pos]

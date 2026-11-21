@@ -1,9 +1,18 @@
+# pyglet.font imports pyglet.gl.  pyglet 2.x creates a hidden 1x1 shadow
+# window/context during that import unless this option is set first, and the
+# game must own exactly one window/context.  Set it here too so importing
+# settings on its own can never create a window.
+import pyglet
+pyglet.options['shadow_window'] = False
+
 import random
 # import timeit
-import pygame
+
 from pyglet import font
 import json
 import os
+
+from game.frame_clock import FrameClock
 
 lang_type_file = open("gui/lang.mclanguage", "r")
 lang_type = str(lang_type_file.read())
@@ -19,12 +28,14 @@ def load_language():
 translations = load_language()
 if current_language == "zh":
     font.add_file('gui/MinecraftAE.ttf')
-    mainFont = font.load('gui/MinecraftAE.ttf', 15)
 elif current_language == "en":
     font.add_file('gui/main.ttf')
-    mainFont = font.load('gui/main.ttf', 20)
 
-pygame.init()
+# pyglet 2.x font.load() requires a current GL context.  settings is imported
+# before the host window exists, so only register the font files here.  Labels
+# load the face lazily once the window/context is alive.  The old mainFont
+# object was never used; keep the name defined for external callers.
+mainFont = None
 
 OPTIONS_FILE = os.path.join("gui", "options.json")
 
@@ -44,6 +55,7 @@ def save_options():
             "player_shadows": PLAYER_SHADOWS,
             "leaves_sway": LEAVES_SWAY,
             "shadow_quality": SHADOW_QUALITY,
+            "cloud_quality": CLOUD_QUALITY,
             "anti_aliasing": ANTI_ALIASING,
             "dynamic_lighting": DYNAMIC_LIGHTING,
             "difficulty": DIFFICULTY,
@@ -73,6 +85,17 @@ def set_shadow_quality(quality):
     global SHADOW_QUALITY
     quality = str(quality).upper()
     SHADOW_QUALITY = quality if quality in ("LOW", "MEDIUM", "HIGH") else "MEDIUM"
+    save_options()
+
+
+def set_cloud_quality(quality):
+    global CLOUD_QUALITY
+    quality = str(quality).upper()
+    CLOUD_QUALITY = (
+        quality
+        if quality in ("LOW", "MEDIUM", "HIGH", "ULTRA", "INSANE")
+        else "ULTRA"
+    )
     save_options()
 
 
@@ -112,6 +135,9 @@ LEAVES_SWAY = bool(_options.get("leaves_sway", True))
 SHADOW_QUALITY = str(_options.get("shadow_quality", "MEDIUM")).upper()
 if SHADOW_QUALITY not in ("LOW", "MEDIUM", "HIGH"):
     SHADOW_QUALITY = "MEDIUM"
+CLOUD_QUALITY = str(_options.get("cloud_quality", "ULTRA")).upper()
+if CLOUD_QUALITY not in ("LOW", "MEDIUM", "HIGH", "ULTRA", "INSANE"):
+    CLOUD_QUALITY = "ULTRA"
 ANTI_ALIASING = bool(_options.get("anti_aliasing", True))
 DYNAMIC_LIGHTING = bool(_options.get("dynamic_lighting", True))
 DIFFICULTY = str(_options.get("difficulty", "NORMAL")).upper()
@@ -122,19 +148,21 @@ try:
 except (TypeError, ValueError):
     SOUND_VOLUME = 1.0
 
-monitor = pygame.display.Info()
-#WIDTH = monitor.current_w
-#HEIGHT = monitor.current_h
 WIDTH = 854
 HEIGHT = 480
 MAX_FPS = 2000
 PAUSE = True
 IN_MENU = True
 MC_VERSION = "1"
-clock = pygame.time.Clock()
+clock = FrameClock()
 DEBUG = True
 FOV = 100
 MOUSE_SENSITIVITY = 0.5
+# pyglet exposes no raw finger events on Windows, so touch mode is a
+# mouse-driven fallback.  Set TOUCH_MODE = True to show the on-screen controls
+# at startup (F10 toggles it at runtime).
+TOUCH_MODE = False
+TOUCH_LOOK_SENSITIVITY = 0.22  # degrees per pixel of finger drag
 RENDER_DISTANCE = 192
 DISTANCE_CULLING = True
 CHUNKS_RENDER_DISTANCE = 96

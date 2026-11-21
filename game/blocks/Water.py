@@ -4,7 +4,11 @@ import os
 import time
 from dataclasses import dataclass
 
+# Must run before pyglet.gl is imported: pyglet 2.x otherwise creates a hidden
+# 1x1 shadow window and a second GL context, and the game must own exactly one
+# window/context.
 import pyglet
+pyglet.options['shadow_window'] = False
 from OpenGL.GL import *
 
 
@@ -31,6 +35,9 @@ class AnimatedTextureGroup(pyglet.graphics.TextureGroup):
                 frame = texture
                 break
             elapsed -= duration
+        # Match pyglet 2.x TextureGroup.set_state, which selects unit 0 before
+        # binding.  The animated group overrides set_state and must do it too.
+        glActiveTexture(GL_TEXTURE0)
         glEnable(frame.target)
         glBindTexture(frame.target, frame.id)
 

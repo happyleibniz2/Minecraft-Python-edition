@@ -1,6 +1,7 @@
 import math
 from collections import deque
 
+import numpy as np
 from OpenGL.GL import *
 from functions import roundPos, cube_vertices, adjacent
 from game.blocks.Cube import Cube
@@ -193,6 +194,84 @@ class CubeHandler:
         if mod_loader is not None:
             mod_loader.post("block_added", scene=self.gl, position=p, block=cube)
         return True
+
+    def add_generated_chunk(self, origin, block_array, palette, min_y):
+        """Bulk-insert a compact ``uint8`` chunk volume.
+
+        This is the bridge between the vectorised/parallel generator and the
+        normal cube world.  It deliberately avoids ``add()``'s per-block
+        bookkeeping (torch support checks, mod events, fluid scheduling) and
+        marks each affected render chunk dirty exactly once.
+        """
+        x0, z0 = origin
+        size_y, size_x, size_z = block_array.shape
+        size_chunk_x, size_chunk_y, size_chunk_z = self.RENDER_CHUNK_SIZE
+
+        cubes = self.cubes
+        collidable = self.collidable
+        fluids = self.fluids
+        block_table = self.block
+        alpha_textures = self.alpha_textures
+        render_chunks = self.render_chunks
+        world_blocks = getattr(getattr(self.gl, "worldGen", None), "blocks", None)
+
+        mod_loader = getattr(self.gl, "mod_loader", None)
+        listeners = getattr(getattr(mod_loader, "events", None), "listeners", None)
+        notify = bool(listeners and listeners.get("block_added"))
+        added_cubes = [] if notify else None
+
+        ys, xs, zs = np.nonzero(block_array)
+        ids = block_array[ys, xs, zs]
+        dirty = set()
+        added = 0
+
+        for local_y, local_x, local_z, block_id in zip(
+                ys.tolist(), xs.tolist(), zs.tolist(), ids.tolist()):
+            name = palette[block_id]
+            if name == "air":
+                continue
+            p = (x0 + local_x, min_y + local_y, z0 + local_z)
+            if p in cubes:
+                continue
+
+            cube = Cube(name, p, block_table[name],
+                        self.block_render_type(name, alpha_textures))
+            cubes[p] = cube
+            if name not in ('water', 'lava', 'torch', 'tall_grass'):
+                collidable[p] = cube
+            elif name == "water":
+                fluids[p] = FluidState(0, True, False)
+
+            chunk_key = (p[0] // size_chunk_x, p[1] // size_chunk_y,
+                         p[2] // size_chunk_z)
+            chunk = render_chunks.get(chunk_key)
+            if chunk is None:
+                chunk = self._get_or_create_chunk(chunk_key)
+            chunk.cubes[p] = cube
+            dirty.add(chunk_key)
+
+            if world_blocks is not None:
+                world_blocks[p] = name
+            if notify:
+                added_cubes.append((p, cube))
+            added += 1
+
+        # A chunk's boundary faces are visible/invisible depending on its
+        # neighbours, so previously meshed neighbours must be rebuilt too.
+        for chunk_key in dirty:
+            self.render_chunks[chunk_key].mark_dirty()
+            cx, cy, cz = chunk_key
+            for dx, dy, dz in ((1, 0, 0), (-1, 0, 0), (0, 1, 0),
+                               (0, -1, 0), (0, 0, 1), (0, 0, -1)):
+                neighbour = render_chunks.get((cx + dx, cy + dy, cz + dz))
+                if neighbour is not None:
+                    neighbour.mark_dirty()
+
+        if notify:
+            for position, cube in added_cubes:
+                mod_loader.post("block_added", scene=self.gl,
+                                position=position, block=cube)
+        return added
 
     def remove(self, p):
         if p not in self.cubes:
@@ -668,61 +747,81 @@ class CubeHandler:
 
         self.frustum.extract()
 
-        visible = []
-        render_distance_squared = render_distance * render_distance
-        for chunk in self._iter_chunks_near(player_pos, render_distance):
-            distance_squared = self.chunk_distance_squared(chunk, player_pos)
-            # Distance check – only if culling is enabled
-            if settings.DISTANCE_CULLING:
-                if distance_squared > render_distance_squared:
-                    continue
+        chunks = list(self._iter_chunks_near(player_pos, render_distance))
+        if not chunks:
+            self.visible_water_chunks = []
+            return
 
-            x0, y0, z0, x1, y1, z1 = self.chunk_bounds(chunk)
-            if not self.frustum.cube_in_frustum(x0, y0, z0, x1, y1, z1):
-                continue
+        # Vectorised distance + frustum culling.  Building the bounds array
+        # once per frame keeps all per-chunk Python arithmetic out of the hot
+        # path while still using the same conservative AABB test.
+        count = len(chunks)
+        sx, sy, sz = self.RENDER_CHUNK_SIZE
+        cx = np.fromiter((chunk.cx for chunk in chunks), dtype=np.float32,
+                         count=count)
+        cy = np.fromiter((chunk.cy for chunk in chunks), dtype=np.float32,
+                         count=count)
+        cz = np.fromiter((chunk.cz for chunk in chunks), dtype=np.float32,
+                         count=count)
+        x0 = cx * sx - 0.5
+        y0 = cy * sy - 0.5
+        z0 = cz * sz - 0.5
+        bounds = np.stack(
+            (x0, y0, z0, x0 + sx, y0 + sy, z0 + sz), axis=1
+        )
 
-            center_x = (x0 + x1) / 2
-            center_y = (y0 + y1) / 2
-            center_z = (z0 + z1) / 2
-            center_distance = ((center_x - player_pos[0]) ** 2
-                               + (center_y - player_pos[1]) ** 2
-                               + (center_z - player_pos[2]) ** 2)
-            visible.append((center_distance, chunk))
+        px, py, pz = player_pos
+        if settings.DISTANCE_CULLING:
+            dx = np.maximum(np.maximum(bounds[:, 0] - px, px - bounds[:, 3]), 0.0)
+            dy = np.maximum(np.maximum(bounds[:, 1] - py, py - bounds[:, 4]), 0.0)
+            dz = np.maximum(np.maximum(bounds[:, 2] - pz, pz - bounds[:, 5]), 0.0)
+            distance_squared = dx * dx + dy * dy + dz * dz
+            mask = distance_squared <= render_distance * render_distance
+        else:
+            mask = np.ones(count, dtype=bool)
 
-        visible.sort(key=lambda item: item[0])
-        glPushAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
-        try:
-            glDisable(GL_BLEND)
-            glDepthMask(GL_TRUE)
-            for _, chunk in visible:
-                chunk.render_opaque()
-        finally:
-            glPopAttrib()
+        mask &= self.frustum.cube_in_frustum_batch(bounds)
+        if not np.any(mask):
+            self.visible_water_chunks = []
+            return
+
+        # Front-to-back order maximises early-Z rejection.  Use the AABB
+        # centre for a stable, cheap sort key.
+        center_x = (bounds[:, 0] + bounds[:, 3]) * 0.5 - px
+        center_y = (bounds[:, 1] + bounds[:, 4]) * 0.5 - py
+        center_z = (bounds[:, 2] + bounds[:, 5]) * 0.5 - pz
+        center_distance = (center_x * center_x
+                           + center_y * center_y
+                           + center_z * center_z)
+        selected = np.nonzero(mask)[0]
+        selected = selected[np.argsort(center_distance[selected], kind="stable")]
+        visible = [chunks[int(index)] for index in selected]
+
+        # Explicit state changes are substantially cheaper than
+        # glPushAttrib/glPopAttrib, which can force a driver round-trip.
+        glDisable(GL_BLEND)
+        glDepthMask(GL_TRUE)
+        glEnable(GL_DEPTH_TEST)
+        for chunk in visible:
+            chunk.render_opaque()
 
         # Binary foliage/plant cutouts write depth only for genuinely opaque
         # texels. Keeping blending off prevents partial mip alpha from hiding
         # terrain behind leaves.
-        glPushAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT)
-        try:
-            glDisable(GL_BLEND)
-            glEnable(GL_ALPHA_TEST)
-            glAlphaFunc(GL_GREATER, 0.5)
-            for _, chunk in visible:
-                chunk.render_cutout()
-        finally:
-            glPopAttrib()
+        glDisable(GL_BLEND)
+        glEnable(GL_ALPHA_TEST)
+        glAlphaFunc(GL_GREATER, 0.5)
+        for chunk in visible:
+            chunk.render_cutout()
 
         # tinted grass side overlays: alpha cut-outs sitting on the dirt sides
-        glPushAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
-        try:
-            glEnable(GL_BLEND)
-            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
-            glEnable(GL_POLYGON_OFFSET_FILL)
-            glPolygonOffset(-1.0, -1.0)
-            for _, chunk in visible:
-                chunk.render_overlay()
-        finally:
-            glPopAttrib()
+        glEnable(GL_BLEND)
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+        glEnable(GL_POLYGON_OFFSET_FILL)
+        glPolygonOffset(-1.0, -1.0)
+        for chunk in visible:
+            chunk.render_overlay()
+        glDisable(GL_POLYGON_OFFSET_FILL)
 
         self.visible_water_chunks = list(reversed(visible))
 
@@ -738,12 +837,9 @@ class CubeHandler:
                 chunk.render_shadow()
 
     def render_water(self):
-        glPushAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
-        try:
-            glEnable(GL_BLEND)
-            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
-            glDepthMask(GL_FALSE)
-            for _, chunk in self.visible_water_chunks:
-                chunk.render_water()
-        finally:
-            glPopAttrib()
+        glEnable(GL_BLEND)
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+        glDepthMask(GL_FALSE)
+        for chunk in self.visible_water_chunks:
+            chunk.render_water()
+        glDepthMask(GL_TRUE)

@@ -1,4 +1,10 @@
-"""Lightweight positional sound physics for Pygame's stereo mixer."""
+"""Lightweight positional sound physics.
+
+Audio is disabled in this build, so the mixer always hands back a ``None``
+channel and every method short-circuits.  The class is kept because
+``BlockSound`` calls it on every sound effect; keeping it means the gameplay
+path is unchanged when audio is re-enabled.
+"""
 
 import math
 

@@ -1,8 +1,14 @@
 import math
+import os
 import random
+import sys
 import time
 from collections import deque
+from concurrent.futures import ProcessPoolExecutor
 
+import numpy as np
+
+from game.world import gen_worker
 from game.world.Biomes import Biomes
 from game.world.PerlinNoise import PerlinNoise
 from settings import *
@@ -16,6 +22,19 @@ class worldGenerator:
     BACKGROUND_GENERATION_RADIUS = 64
 
     def __init__(self, glClass, seed=43242):
+        # Replacing a world while its initial load is still running would
+        # otherwise leave a spawn pool alive in the background.  The Scene
+        # assigns the new generator after this constructor returns, so the old
+        # one is still visible on ``glClass`` here.
+        previous = getattr(glClass, "worldGen", None)
+        if previous is not None and previous is not self:
+            shutdown = getattr(previous, "_shutdown_executor", None)
+            if shutdown is not None:
+                try:
+                    shutdown()
+                except Exception:
+                    pass
+
         self.seed = seed
         self.chunks = {}
         self.worldPerlin = PerlinNoise(seed, mh=8)
@@ -46,6 +65,16 @@ class worldGenerator:
         self.loading = deque()
         self._biome_cache = {}
 
+        # Parallel initial-generation state.  The executor is created lazily
+        # on the first initial-load call so normal gameplay and unit tests do
+        # not pay for worker processes.
+        self._executor = None
+        self._futures = {}
+        self._max_inflight = 0
+        self._parallel_failed = False
+        self._parallel_complete = False
+        self._fast_configured = False
+
     def add(self, p, t):
         # one dict lookup instead of a membership test plus an insert
         blocks = self.blocks
@@ -58,6 +87,18 @@ class worldGenerator:
         if player.hp == -1:
             player.hp = 20
         self._queue_around(player.position)
+
+        # Initial loading uses the vectorised generator (and, when the entry
+        # point is multiprocessing-safe, a process pool).  Background loading
+        # keeps the incremental time-budgeted path below.
+        if self._executor is not None:
+            return self._gen_parallel(max_chunks_per_call, max_blocks_per_call)
+        if time_budget <= 0 and not self._parallel_failed and not self._parallel_complete:
+            self._ensure_executor()
+            if self._executor is not None:
+                return self._gen_parallel(max_chunks_per_call, max_blocks_per_call)
+        if time_budget <= 0:
+            return self._gen_fast_sequential(max_chunks_per_call)
 
         pending_limit = max_blocks_per_call * 4
         chunks_started = 0
@@ -109,6 +150,184 @@ class worldGenerator:
     @property
     def generated_count(self):
         return len(self.generated_chunks)
+
+    # ------------------------------------------------------------------
+    # Fast / parallel generation
+    # ------------------------------------------------------------------
+    def _configure_fastgen(self):
+        """Point the shared vectorised generator at this world's seed."""
+        if self._fast_configured:
+            return
+        gen_worker.configure(
+            self.seed, self._noise_offsets, CHUNK_SIZE,
+            self.MIN_Y, self.MAX_Y, self.SEA_LEVEL,
+            world_noise=self.worldPerlin, biome_noise=self.perlinBiomes,
+        )
+        self._fast_configured = True
+
+    def _ensure_executor(self):
+        """Create a spawn-based worker pool when the entry point is safe.
+
+        ``multiprocessing`` re-imports ``__main__`` on Windows.  The project's
+        supported entry point is ``start.py`` (which guards its body with
+        ``if __name__ == "__main__"``), so we only start workers there.  A
+        direct ``python minecraft_main_program.py`` run falls back to the
+        in-process vectorised path instead of spawning the whole game again.
+        """
+        if self._executor is not None or self._parallel_failed:
+            return
+        main_file = getattr(sys.modules.get("__main__"), "__file__", "") or ""
+        if os.path.basename(main_file).lower() != "start.py":
+            self._parallel_failed = True
+            return
+        try:
+            import multiprocessing
+            workers = max(1, min(6, os.cpu_count() or 1))
+            context = multiprocessing.get_context("spawn")
+            self._executor = ProcessPoolExecutor(
+                max_workers=workers,
+                mp_context=context,
+                initializer=gen_worker.worker_init,
+                initargs=(
+                    self.seed, self._noise_offsets, CHUNK_SIZE,
+                    self.MIN_Y, self.MAX_Y, self.SEA_LEVEL,
+                ),
+            )
+            self._max_inflight = workers * 3
+        except Exception as error:
+            print(f"Warning: parallel world generation unavailable ({error})")
+            self._executor = None
+            self._parallel_failed = True
+
+    def _shutdown_executor(self, cancel=True):
+        if self._executor is None:
+            return
+        for future in list(self._futures):
+            if cancel:
+                # Discarding a world: never ingest results from the old seed
+                # into the new scene's cube handler.
+                future.cancel()
+            elif future.done():
+                self._collect_future(future)
+        self._futures.clear()
+        self.generating_chunks.clear()
+        try:
+            self._executor.shutdown(wait=False, cancel_futures=cancel)
+        except TypeError:  # Python < 3.9 compatibility
+            self._executor.shutdown(wait=False)
+        self._executor = None
+
+    def _collect_future(self, future):
+        origin = self._futures.pop(future, None)
+        if origin is None:
+            return 0
+        self.generating_chunks.discard(origin)
+        try:
+            payload = future.result()
+        except Exception as error:
+            print(f"Warning: chunk generation failed for {origin}: {error}")
+            payload = None
+        if payload is None:
+            # A failed worker must not leave a hole in the world; generate the
+            # chunk locally with the same vectorised code.
+            self._configure_fastgen()
+            payload = gen_worker.generate_chunk(origin)
+        self.generated_chunks.add(origin)
+        return self._ingest_payload(payload)
+
+    def _submit_origin(self, origin):
+        if origin in self.generated_chunks or origin in self.generating_chunks:
+            return False
+        self.generating_chunks.add(origin)
+        future = self._executor.submit(gen_worker.worker_generate, origin)
+        self._futures[future] = origin
+        return True
+
+    def _gen_parallel(self, max_chunks_per_call, max_blocks_per_call):
+        """Submit and harvest vectorised chunk jobs without blocking a frame."""
+        columns_generated = 0
+        blocks_loaded = 0
+
+        submitted = 0
+        while (self.queue and self._executor is not None
+               and len(self._futures) < self._max_inflight
+               and (max_chunks_per_call <= 0
+                    or submitted < max_chunks_per_call)):
+            if max_chunks_per_call <= 0:
+                break
+            origin = self.queue.popleft()
+            self.queued_chunks.discard(origin)
+            if self._submit_origin(origin):
+                submitted += 1
+
+        # Harvest every completed future.  Each one is a complete chunk, so
+        # there is no partial-column bookkeeping to do.
+        for future in [item for item in self._futures if item.done()]:
+            blocks_loaded += self._collect_future(future)
+            columns_generated += CHUNK_SIZE[0] * CHUNK_SIZE[2]
+
+        if max_chunks_per_call <= 0 and not self._futures:
+            # The initial-load budget is satisfied; return to the incremental
+            # path for the remaining background chunks.  Mark the parallel
+            # phase complete so later zero-budget calls do not recreate the
+            # process pool every frame.
+            self._parallel_complete = True
+            self._shutdown_executor(cancel=False)
+        return columns_generated, blocks_loaded
+
+    def _gen_fast_sequential(self, max_chunks_per_call):
+        """In-process fallback used when a process pool is not available."""
+        self._configure_fastgen()
+        columns_generated = 0
+        blocks_loaded = 0
+        generated = 0
+        if max_chunks_per_call <= 0:
+            return columns_generated, blocks_loaded
+        while self.queue and generated < max_chunks_per_call:
+            origin = self.queue.popleft()
+            self.queued_chunks.discard(origin)
+            if origin in self.generated_chunks or origin in self.generating_chunks:
+                continue
+            payload = gen_worker.generate_chunk(origin)
+            self.generated_chunks.add(origin)
+            blocks_loaded += self._ingest_payload(payload)
+            columns_generated += CHUNK_SIZE[0] * CHUNK_SIZE[2]
+            generated += 1
+        return columns_generated, blocks_loaded
+
+    def _ingest_payload(self, payload):
+        """Copy a compact worker result into the live cube handler.
+
+        Worker processes return a *flat* ``uint8`` array to keep the IPC
+        payload small and avoid pickling a multi-dimensional view.  In-process
+        generation returns the shaped ``(height, chunk_x, chunk_z)`` volume, so
+        accept both here.
+        """
+        origin, block_array = payload
+        if block_array.ndim == 1:
+            block_array = block_array.reshape(
+                (WORLD_MAX_Y - WORLD_MIN_Y + 1, CHUNK_SIZE[0], CHUNK_SIZE[2])
+            )
+        cubes = getattr(self.gl, "cubes", None)
+        if cubes is not None and hasattr(cubes, "add_generated_chunk"):
+            return cubes.add_generated_chunk(
+                origin, block_array, gen_worker.BLOCK_NAMES, self.MIN_Y
+            )
+
+        # Headless fallback (tests/benchmarks): only the save-format dict is
+        # required, so avoid creating Cube objects.
+        x0, z0 = origin
+        ys, xs, zs = np.nonzero(block_array)
+        added = 0
+        for y, x, z, block_id in zip(
+                ys.tolist(), xs.tolist(), zs.tolist(),
+                block_array[ys, xs, zs].tolist()):
+            name = gen_worker.BLOCK_NAMES[block_id]
+            if name == "air":
+                continue
+            self.blocks[(x0 + x, self.MIN_Y + y, z0 + z)] = name
+            added += 1
+        return added
 
     def _queue_around(self, position):
         size_x, _, size_z = CHUNK_SIZE

@@ -1,9 +1,12 @@
+# Keep pyglet 2.x from creating its hidden shadow window when pyglet.gl is
+# imported before pyglet.window: the game owns exactly one window/context.
+import pyglet
+pyglet.options['shadow_window'] = False
+
 import math
 from random import randint
 
-import pyglet
 from pyglet.gl import GL_QUADS
-import pygame
 from game.GUI.ModalWindow import ModalWindow
 from game.crafting import getCraftingItem
 from game.SlotMechanics import (

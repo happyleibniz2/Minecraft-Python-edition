@@ -1,4 +1,10 @@
-import pygame
+# Must run before pyglet.window is imported: pyglet 2.x otherwise creates a
+# hidden 1x1 shadow window and a second GL context, and the game must own
+# exactly one window/context.
+import pyglet
+pyglet.options['shadow_window'] = False
+
+from pyglet.window import key
 from OpenGL.GL import *
 from functions import checkHover
 
@@ -47,8 +53,9 @@ class ModalWindow:
         win = self.window
         win.blit(self.gl.WIDTH // 2 - (win.width // 2), self.gl.HEIGHT // 2 - (win.height // 2))
 
-        mp = pygame.mouse.get_pos()
-        click = pygame.mouse.get_pressed(3)
+        host = getattr(self.gl, "host", None)
+        mp = host.mouse_pos if host is not None else (0, 0)
+        click = host.mouse_buttons if host is not None else (False, False, False)
 
         hover = self.gl.gui.GUI_TEXTURES["selected"]
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
@@ -71,8 +78,7 @@ class ModalWindow:
         for i in self.updateFunctions:
             i(win, mp)
 
-        key = pygame.key.get_pressed()
-        if key[pygame.K_ESCAPE]:
+        if host is not None and host.key_down(key.ESCAPE):
             self.destroyWindow()
             return
 

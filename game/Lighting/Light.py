@@ -368,6 +368,11 @@ class Light:
 
     def texture_coordinates(self, face_vertices, cube=None):
         """UV plus per-vertex torch light encoded in texture-coordinate Z."""
+        if not self.lightSources:
+            # No torch can reach this face, so every vertex has zero light.
+            # Returning a shared constant avoids four cache lookups per face
+            # during the initial world mesh.
+            return 't3f', (0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0)
         uv = ((0, 0), (1, 0), (1, 1), (0, 1))
         coords = []
         for index, (u, v) in enumerate(uv):

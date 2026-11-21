@@ -1,35 +1,68 @@
-"""Volumetric clouds with a layered-puff compatibility fallback."""
+"""Volumetric cloud rendering with layered-puff compatibility fallback.
 
+The ULTRA pipeline is deliberately uncompromising:
+* 3D GLSL Perlin noise and 3D Worley/cellular noise
+* 6-octave Perlin FBM for the base shape, 3-octave Worley FBM for billows
+* Full volumetric ray marching (256 steps ULTRA, 384 INSANE)
+* Beer-Lambert extinction
+* Dual-lobe Henyey-Greenstein phase function (silver lining)
+* Powder effect plus a secondary light sample for internal glow
+* Height-gradient cloud slab and atmospheric ambient tint
+
+If GLSL 330 compilation fails, or the shaders option is disabled, the module
+falls back to the original 2D billboard puff system.
+"""
+
+import ctypes
 import math
 import random
 
+import numpy as np
+
+# Must run before pyglet.gl is imported: pyglet 2.x otherwise creates a hidden
+# 1x1 shadow window and a second GL context, and the game must own exactly one
+# window/context.
 import pyglet
+pyglet.options['shadow_window'] = False
 from OpenGL.GL import *
 from OpenGL.GL.shaders import compileProgram, compileShader
 
+import settings
 
+
+# ---------------------------------------------------------------------------
+# GLSL 330 core full-screen triangle
+# ---------------------------------------------------------------------------
 CLOUD_VERTEX_SHADER = """
-#version 120
-varying vec2 screenUv;
+#version 330 core
+
+layout(location = 0) in vec2 aPosition;
+layout(location = 1) in vec2 aTexCoord;
+out vec2 screenUv;
 
 void main() {
-    gl_Position = gl_Vertex;
-    screenUv = gl_MultiTexCoord0.xy;
+    gl_Position = vec4(aPosition, 0.0, 1.0);
+    screenUv = aTexCoord;
 }
 """
 
 
 CLOUD_FRAGMENT_SHADER = """
-#version 120
-varying vec2 screenUv;
+#version 330 core
+
+in vec2 screenUv;
+out vec4 fragColor;
 
 uniform vec3 cameraPosition;
 uniform vec3 cameraForward;
 uniform vec3 cameraRight;
 uniform vec3 cameraUp;
 uniform vec3 sunDirection;
+uniform vec3 sunColor;
 uniform vec3 skyColor;
 uniform vec3 horizonColor;
+uniform vec3 cloudBoxMin;
+uniform vec3 cloudBoxMax;
 uniform vec2 windOffset;
 uniform float aspectRatio;
 uniform float tanHalfFov;
@@ -40,62 +73,129 @@ uniform float gameTime;
 uniform float drawDistance;
 uniform float cloudBase;
 uniform float cloudTop;
+uniform int qualityLevel; // 0 LOW, 1 MEDIUM, 2 HIGH, 3 ULTRA, 4 INSANE
 
-// Improved hash function for better noise distribution
-float hash31(vec3 p) {
-    p = fract(p * vec3(0.1031, 0.1030, 0.0973));
-    p += dot(p, p.yzx + 33.33);
-    return fract((p.x + p.y) * p.z);
+const int MAX_STEPS = 256;       // ULTRA
+const int INSANE_STEPS = 384;
+const float PI = 3.14159265359;
+
+// ---------------------------------------------------------------------------
+// Hashes
+// ---------------------------------------------------------------------------
+float hash12(vec2 p) {
+    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
 }
 
-// Smooth 3D value noise with proper interpolation
-float valueNoise3(vec3 p) {
-    vec3 cell = floor(p);
-    vec3 local = fract(p);
-    // Quintic interpolation for smoother results (reduces itching)
-    local = local * local * local * (local * (local * 6.0 - 15.0) + 10.0);
-    
-    float n000 = hash31(cell);
-    float n100 = hash31(cell + vec3(1, 0, 0));
-    float n010 = hash31(cell + vec3(0, 1, 0));
-    float n110 = hash31(cell + vec3(1, 1, 0));
-    float n001 = hash31(cell + vec3(0, 0, 1));
-    float n101 = hash31(cell + vec3(1, 0, 1));
-    float n011 = hash31(cell + vec3(0, 1, 1));
-    float n111 = hash31(cell + vec3(1, 1, 1));
-    
-    float lower = mix(mix(n000, n100, local.x), mix(n010, n110, local.x), local.y);
-    float upper = mix(mix(n001, n101, local.x), mix(n011, n111, local.x), local.y);
-    return mix(lower, upper, local.z);
+vec3 hash33(vec3 p3) {
+    p3 = fract(p3 * vec3(0.1031, 0.1030, 0.0973));
+    p3 += dot(p3, p3.yxz + 33.33);
+    return fract((p3.xxy + p3.yxx) * p3.zyx);
 }
 
-// Fractal Brownian Motion with improved octave blending
-float fbm(vec3 p) {
-    float value = 0.0;
-    float amplitude = 0.5;
-    float frequency = 1.0;
-    
-    for (int i = 0; i < 5; i++) {
-        value += amplitude * valueNoise3(p * frequency);
-        amplitude *= 0.5;
-        frequency *= 2.02;
-    }
-    return value;
+// ---------------------------------------------------------------------------
+// Classic 3D Perlin noise (Stefan Gustavson / webgl-noise style)
+// ---------------------------------------------------------------------------
+vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+vec4 mod289(vec4 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+vec4 permute(vec4 x) { return mod289(((x * 34.0) + 1.0) * x); }
+vec4 taylorInvSqrt(vec4 r) {
+    return 1.79284291400159 - 0.85373472095314 * r;
 }
 
-// Worley noise for cloud cell structure (reduces repetitive patterns)
-float worleyNoise(vec3 p) {
-    vec3 cell = floor(p);
-    vec3 local = fract(p);
-    
+float perlinNoise3(vec3 P) {
+    vec3 Pi0 = floor(P);
+    vec3 Pi1 = Pi0 + vec3(1.0);
+    Pi0 = mod289(Pi0);
+    Pi1 = mod289(Pi1);
+
+    vec3 Pf0 = fract(P);
+    vec3 Pf1 = Pf0 - vec3(1.0);
+
+    vec4 ix = vec4(Pi0.x, Pi1.x, Pi0.x, Pi1.x);
+    vec4 iy = vec4(Pi0.yy, Pi1.yy);
+    vec4 iz0 = Pi0.zzzz;
+    vec4 iz1 = Pi1.zzzz;
+
+    vec4 ixy = permute(permute(ix) + iy);
+    vec4 ixy0 = permute(ixy + iz0);
+    vec4 ixy1 = permute(ixy + iz1);
+
+    vec4 gx0 = ixy0 * (1.0 / 7.0);
+    vec4 gy0 = fract(floor(gx0) * (1.0 / 7.0)) - 0.5;
+    gx0 = fract(gx0);
+    vec4 gz0 = vec4(0.5) - abs(gx0) - abs(gy0);
+    vec4 sz0 = step(gz0, vec4(0.0));
+    gx0 -= sz0 * (step(0.0, gx0) - 0.5);
+    gy0 -= sz0 * (step(0.0, gy0) - 0.5);
+
+    vec4 gx1 = ixy1 * (1.0 / 7.0);
+    vec4 gy1 = fract(floor(gx1) * (1.0 / 7.0)) - 0.5;
+    gx1 = fract(gx1);
+    vec4 gz1 = vec4(0.5) - abs(gx1) - abs(gy1);
+    vec4 sz1 = step(gz1, vec4(0.0));
+    gx1 -= sz1 * (step(0.0, gx1) - 0.5);
+    gy1 -= sz1 * (step(0.0, gy1) - 0.5);
+
+    vec3 g000 = vec3(gx0.x, gy0.x, gz0.x);
+    vec3 g100 = vec3(gx0.y, gy0.y, gz0.y);
+    vec3 g010 = vec3(gx0.z, gy0.z, gz0.z);
+    vec3 g110 = vec3(gx0.w, gy0.w, gz0.w);
+    vec3 g001 = vec3(gx1.x, gy1.x, gz1.x);
+    vec3 g101 = vec3(gx1.y, gy1.y, gz1.y);
+    vec3 g011 = vec3(gx1.z, gy1.z, gz1.z);
+    vec3 g111 = vec3(gx1.w, gy1.w, gz1.w);
+
+    vec4 norm0 = taylorInvSqrt(vec4(
+        dot(g000, g000), dot(g100, g100),
+        dot(g010, g010), dot(g110, g110)));
+    g000 *= norm0.x;
+    g100 *= norm0.y;
+    g010 *= norm0.z;
+    g110 *= norm0.w;
+
+    vec4 norm1 = taylorInvSqrt(vec4(
+        dot(g001, g001), dot(g101, g101),
+        dot(g011, g011), dot(g111, g111)));
+    g001 *= norm1.x;
+    g101 *= norm1.y;
+    g011 *= norm1.z;
+    g111 *= norm1.w;
+
+    float n000 = dot(g000, Pf0);
+    float n100 = dot(g100, vec3(Pf1.x, Pf0.yz));
+    float n010 = dot(g010, vec3(Pf0.x, Pf1.y, Pf0.z));
+    float n110 = dot(g110, vec3(Pf1.xy, Pf0.z));
+    float n001 = dot(g001, vec3(Pf0.xy, Pf1.z));
+    float n101 = dot(g101, vec3(Pf1.x, Pf0.y, Pf1.z));
+    float n011 = dot(g011, vec3(Pf0.x, Pf1.yz));
+    float n111 = dot(g111, Pf1);
+
+    vec3 fadeXYZ = Pf0 * Pf0 * Pf0 * (Pf0 * (Pf0 * 6.0 - 15.0) + 10.0);
+    vec4 nZ = mix(
+        vec4(n000, n100, n010, n110),
+        vec4(n001, n101, n011, n111),
+        fadeXYZ.z);
+    vec2 nYZ = mix(nZ.xy, nZ.zw, fadeXYZ.y);
+    float nXYZ = mix(nYZ.x, nYZ.y, fadeXYZ.x);
+    return 2.2 * nXYZ;
+}
+
+// ---------------------------------------------------------------------------
+// 3D Worley / cellular noise
+// ---------------------------------------------------------------------------
+float worleyNoise(vec3 p, float cellularScale) {
+    vec3 scaled = p * cellularScale;
+    vec3 cell = floor(scaled);
+    vec3 local = fract(scaled);
     float minDist = 1.0;
-    for (int x = -1; x <= 1; x++) {
-        for (int y = -1; y <= 1; y++) {
-            for (int z = -1; z <= 1; z++) {
+
+    for (int x = -1; x <= 1; ++x) {
+        for (int y = -1; y <= 1; ++y) {
+            for (int z = -1; z <= 1; ++z) {
                 vec3 neighbor = vec3(float(x), float(y), float(z));
-                vec3 point = vec3(hash31(cell + neighbor + vec3(0.0, 100.0, 200.0)),
-                                  hash31(cell + neighbor + vec3(100.0, 0.0, 300.0)),
-                                  hash31(cell + neighbor + vec3(200.0, 300.0, 0.0)));
+                vec3 point = hash33(cell + neighbor);
                 float dist = length(local - neighbor - point);
                 minDist = min(minDist, dist);
             }
@@ -104,138 +204,290 @@ float worleyNoise(vec3 p) {
     return minDist;
 }
 
+// ---------------------------------------------------------------------------
+// FBM (fixed loop bounds with early break so every GLSL 330 driver accepts it)
+// ---------------------------------------------------------------------------
+float fbmPerlin(vec3 p, int octaves) {
+    float value = 0.0;
+    float amplitude = 0.5;
+    float frequency = 1.0;
+    for (int i = 0; i < 8; ++i) {
+        if (i >= octaves) break;
+        value += amplitude * perlinNoise3(p * frequency);
+        amplitude *= 0.5;
+        frequency *= 2.02;
+    }
+    return value;
+}
+
+float fbmWorley(vec3 p, int octaves) {
+    float value = 0.0;
+    float amplitude = 0.5;
+    float frequency = 1.0;
+    for (int i = 0; i < 5; ++i) {
+        if (i >= octaves) break;
+        value += amplitude * worleyNoise(p, frequency);
+        amplitude *= 0.5;
+        frequency *= 2.0;
+    }
+    return value;
+}
+
+// ---------------------------------------------------------------------------
+// Density field
+// ---------------------------------------------------------------------------
+// A low-frequency warp keeps the cloud base from reading as a perfectly flat
+// sheet while the height gradient still gives it a defined slab shape.
+float cloudHeight(vec3 world) {
+    vec2 horizontal = vec2(
+        world.x + windOffset.x, world.z + windOffset.y);
+    float baseWarp = perlinNoise3(vec3(horizontal * 0.030, 0.0));
+    float topWarp = perlinNoise3(
+        vec3(horizontal * 0.022 + vec2(31.7, -17.3), 0.0));
+    float localBase = cloudBase + (baseWarp * 0.5 + 0.5) * 8.0;
+    float localTop = cloudTop - (topWarp * 0.5 + 0.5) * 22.0;
+    return (world.y - localBase) / max(localTop - localBase, 1.0);
+}
+
 float cloudDensity(vec3 world) {
-    float height = clamp((world.y - cloudBase) / (cloudTop - cloudBase), 0.0, 1.0);
-    float bottom = smoothstep(0.0, 0.2, height);
-    float top = 1.0 - smoothstep(0.55, 1.0, height);
-    float anvil = mix(0.75, 1.15, smoothstep(0.1, 0.75, height));
+    float height = cloudHeight(world);
+    if (height <= 0.0 || height >= 1.0) {
+        return 0.0;
+    }
 
-    // CRITICAL FIX: Add height gradient for volumetric depth (bottom darker, top brighter)
-    float heightGradient = smoothstep(0.0, 0.25, height) * smoothstep(1.0, 0.65, height);
+    // Flat cloud base, fluffy top, thin anvil edge.
+    float bottom = smoothstep(0.0, 0.06, height);
+    float top = 1.0 - smoothstep(0.94, 1.0, height);
+    float heightGradient = bottom * top;
 
-    // Animate cloud movement over time
     vec3 samplePosition = vec3(
-        (world.x + windOffset.x) * 0.008,
-        height * 1.6,
-        (world.z + windOffset.y) * 0.008);
-    
-    // Combine FBM and Worley noise for more realistic cloud shapes
-    float baseShape = fbm(samplePosition) * anvil;
-    float cellStructure = worleyNoise(samplePosition * 2.5 + vec3(gameTime * 0.002, 0, 0));
-    
-    // Blend noises for varied cloud appearance
-    float shape = mix(baseShape, cellStructure, 0.3);
-    
-    float threshold = 0.65 - coverage * 0.35 - weatherStrength * 0.1;
-    float density = (shape - threshold) * 2.8;
-    
-    // Add fine detail without causing itching
-    float detail = valueNoise3(samplePosition * 5.0 + vec3(0, gameTime * 0.003, 0));
-    density = density * (0.85 + 0.15 * detail);
-    
-    // Apply height gradient for natural lighting variation
-    return clamp(density * bottom * top * heightGradient, 0.0, 1.0);
+        (world.x + windOffset.x) * 0.025,
+        height * 2.4,
+        (world.z + windOffset.y) * 0.025
+    );
+
+    // 6-octave Perlin FBM: base billowy mass.
+    float baseShape = fbmPerlin(samplePosition, 6);
+
+    // 3-octave Worley FBM: cauliflower / cellular erosion.
+    float billow = 1.0 - fbmWorley(
+        samplePosition * 4.0 + vec3(gameTime * 0.0004, 0.0, gameTime * 0.0003),
+        3
+    );
+
+    float shape = mix(baseShape * 0.5 + 0.5, billow, 0.65);
+    float threshold = 0.60 - coverage * 0.30 - weatherStrength * 0.12;
+    float density = smoothstep(threshold, threshold + 0.25, shape) * 1.8;
+
+    // 3-octave high-frequency detail breaks up the silhouette.
+    float detail = fbmPerlin(
+        samplePosition * 7.0 + vec3(gameTime * 0.0008, 0.0, gameTime * 0.0006),
+        3
+    );
+    density *= 0.75 + 0.25 * (detail * 0.5 + 0.5);
+
+    return clamp(density * heightGradient, 0.0, 1.0);
+}
+
+// Cheap density used only inside the light march.
+float cloudDensityLight(vec3 world) {
+    float height = cloudHeight(world);
+    if (height <= 0.0 || height >= 1.0) {
+        return 0.0;
+    }
+    float heightGradient = smoothstep(0.0, 0.06, height)
+                         * (1.0 - smoothstep(0.94, 1.0, height));
+
+    vec3 samplePosition = vec3(
+        (world.x + windOffset.x) * 0.025,
+        height * 2.4,
+        (world.z + windOffset.y) * 0.025
+    );
+    float baseShape = fbmPerlin(samplePosition, 2);
+    float billow = 1.0 - worleyNoise(samplePosition * 4.0, 1.0);
+    float shape = mix(baseShape * 0.5 + 0.5, billow, 0.65);
+    float threshold = 0.60 - coverage * 0.30 - weatherStrength * 0.12;
+    return clamp(
+        smoothstep(threshold, threshold + 0.25, shape)
+        * 1.8 * heightGradient, 0.0, 1.0);
+}
+
+// ---------------------------------------------------------------------------
+// Scattering
+// ---------------------------------------------------------------------------
+float henyeyGreenstein(float cosTheta, float g) {
+    float g2 = g * g;
+    float denom = max(1e-4, 1.0 + g2 - 2.0 * g * cosTheta);
+    return (1.0 - g2) / (4.0 * PI * pow(denom, 1.5));
+}
+
+float dualLobePhase(float cosTheta) {
+    // Strong forward lobe -> silver lining, weak backward lobe -> soft body.
+    return henyeyGreenstein(cosTheta, 0.76) * 0.80
+         + henyeyGreenstein(cosTheta, -0.35) * 0.20;
+}
+
+// ---------------------------------------------------------------------------
+// Robust ray/AABB intersection
+// ---------------------------------------------------------------------------
+vec3 safeDirection(vec3 dir) {
+    // sign(0.0) is 0.0 in GLSL, which would turn invDir into inf. Bias the
+    // sign test so an exactly axis-aligned ray still gets a finite slab test.
+    vec3 magnitude = max(abs(dir), vec3(1e-6));
+    return sign(dir + vec3(1e-9)) * magnitude;
 }
 
 void main() {
     vec2 screen = screenUv * 2.0 - 1.0;
     screen.x *= aspectRatio;
-    vec3 rayDirection = normalize(cameraForward
+
+    vec3 rayDir = normalize(
+        cameraForward
         + cameraRight * screen.x * tanHalfFov
-        + cameraUp * screen.y * tanHalfFov);
+        + cameraUp * screen.y * tanHalfFov
+    );
 
-    // Skip nearly horizontal rays
-    if (abs(rayDirection.y) < 0.0001) {
-        discard;
+    vec3 invDir = 1.0 / safeDirection(rayDir);
+    vec3 t0 = (cloudBoxMin - cameraPosition) * invDir;
+    vec3 t1 = (cloudBoxMax - cameraPosition) * invDir;
+    vec3 tMin = min(t0, t1);
+    vec3 tMax = max(t0, t1);
+
+    float tNear = max(max(tMin.x, tMin.y), max(tMin.z, 0.0));
+    float tFar = min(min(tMax.x, tMax.y), min(tMax.z, drawDistance));
+
+    if (tFar <= tNear) {
+        fragColor = vec4(0.0);
+        return;
     }
 
-    float first = (cloudBase - cameraPosition.y) / rayDirection.y;
-    float second = (cloudTop - cameraPosition.y) / rayDirection.y;
-    float nearDistance = max(0.0, min(first, second));
-    float farDistance = min(drawDistance, max(first, second));
-    if (farDistance <= nearDistance) {
-        discard;
+    int maxSteps;
+    float emptyMultiplier;
+    if (qualityLevel >= 4) {         // INSANE
+        maxSteps = INSANE_STEPS;
+        emptyMultiplier = 1.0;
+    } else if (qualityLevel >= 3) {  // ULTRA
+        maxSteps = MAX_STEPS;
+        emptyMultiplier = 1.0;
+    } else if (qualityLevel >= 2) {  // HIGH
+        maxSteps = 128;
+        emptyMultiplier = 1.5;
+    } else if (qualityLevel >= 1) {  // MEDIUM
+        maxSteps = 64;
+        emptyMultiplier = 2.0;
+    } else {                         // LOW
+        maxSteps = 48;
+        emptyMultiplier = 2.5;
     }
 
-    // CRITICAL FIX: Increased steps from 16 to 32 for smoother volumetric rendering
-    const int STEPS = 32;
-    float stepLength = (farDistance - nearDistance) / float(STEPS);
-    
-    // Temporal reprojection for anti-aliasing (reduces itching)
-    float jitter = hash31(vec3(gl_FragCoord.xy, fract(gameTime * 0.1))) * stepLength * 0.5;
-    float distanceAlongRay = nearDistance + jitter;
-    
+    float stepSize = (tFar - tNear) / float(maxSteps);
+
+    // Hash jitter kills banding without any temporal history buffer.
+    float jitter = hash12(gl_FragCoord.xy + vec2(gameTime * 17.0)) * stepSize;
+    float t = tNear + jitter;
+
     float transmittance = 1.0;
-    vec3 accumulated = vec3(0.0);
+    vec3 scattered = vec3(0.0);
+    float extinctionCoefficient = 0.24;
+    float ambientStrength = 0.18 + 0.30 * daylight;
 
-    for (int stepIndex = 0; stepIndex < STEPS; ++stepIndex) {
-        vec3 position = cameraPosition + rayDirection * distanceAlongRay;
-        float density = cloudDensity(position);
-        
-        if (density > 0.003) {
-            // CRITICAL FIX: Every step samples towards the sun (was only every 3rd step)
-            float towardSun = cloudDensity(position + sunDirection * 4.0);
-            
-            // CRITICAL FIX: Increased light transmission coefficient from 2.5 to 5.0
-            float lightTransmission = exp(-towardSun * 5.0);
-            float forwardScatter = pow(max(dot(rayDirection, sunDirection), 0.0), 8.0);
-            float silverLining = forwardScatter * lightTransmission * 0.7;
-
-            // Time-based cloud coloring (BSL style)
-            vec3 nightCloud = vec3(0.18, 0.22, 0.30);
-            vec3 dayCloud = vec3(0.95, 0.93, 0.90);
-            vec3 sunsetCloud = vec3(1.0, 0.78, 0.65);
-            
-            vec3 shadowColor = mix(
-                mix(nightCloud, vec3(0.35, 0.40, 0.50), daylight),
-                vec3(0.20, 0.24, 0.32), weatherStrength);
-            vec3 litColor = mix(dayCloud, sunsetCloud, 
-                smoothstep(0.75, 0.85, fract(gameTime / 24.0)) * 
-                (1.0 - smoothstep(0.83, 0.92, fract(gameTime / 24.0))));
-            
-            vec3 sampleColor = mix(shadowColor, litColor,
-                clamp(lightTransmission * 0.7 + silverLining, 0.0, 1.0));
-
-            // CRITICAL FIX: Increased Beer-Lambert extinction from 0.045 to 0.12
-            float extinction = density * stepLength * 0.12;
-            float alpha = 1.0 - exp(-extinction);
-            accumulated += sampleColor * alpha * transmittance;
-            transmittance *= 1.0 - alpha;
-            
-            if (transmittance < 0.02) {
-                break;
-            }
+    for (int i = 0; i < maxSteps; ++i) {
+        if (t >= tFar || transmittance < 0.01) {
+            break;
         }
-        distanceAlongRay += stepLength;
+
+        vec3 position = cameraPosition + rayDir * t;
+        float density = cloudDensity(position);
+
+        if (density > 0.003) {
+            // Beer-Lambert extinction for this segment.
+            float extinction = density * stepSize * extinctionCoefficient;
+            float stepAlpha = 1.0 - exp(-extinction);
+
+            // Secondary light march with exponentially growing samples.
+            float lightDensity = 0.0;
+            float lightDistance = 1.5;
+            for (int j = 0; j < 5; ++j) {
+                lightDensity += cloudDensityLight(
+                    position + sunDirection * lightDistance) * lightDistance;
+                lightDistance *= 1.9;
+            }
+            float lightTransmittance = exp(-lightDensity * 0.12);
+
+            // Dual-lobe Henyey-Greenstein phase.
+            float cosTheta = dot(rayDir, sunDirection);
+            float phase = dualLobePhase(cosTheta);
+
+            // Powder effect: thin fringes receive less multiply-scattered
+            // light, keeping the silhouette soft instead of flat.
+            float powder = 1.0 - exp(-density * 2.5);
+            float powderFactor = mix(0.62, 1.0, powder);
+
+            // Cheap multiple-scattering approximation: internal glow.
+            float multipleScatter = (1.0 - lightTransmittance) * 0.35
+                                  + lightTransmittance * 0.10;
+
+            float heightFraction = clamp(
+                (position.y - cloudBase) / (cloudTop - cloudBase), 0.0, 1.0);
+            vec3 ambientColor = mix(horizonColor, skyColor, heightFraction);
+            ambientColor = mix(ambientColor, vec3(0.85, 0.90, 1.0), 0.45);
+            vec3 ambient = ambientColor * ambientStrength
+                         + vec3(0.020, 0.025, 0.040);
+            // The constant term is a cheap diffuse/multiple-scattering base;
+            // the phase term adds the forward-scattered silver lining.
+            vec3 direct = sunColor * lightTransmittance
+                        * (phase * 1.35 + 0.45) * powderFactor;
+            vec3 cloudColor = direct
+                            + ambient
+                            + sunColor * multipleScatter * 0.22;
+
+            scattered += cloudColor * stepAlpha * transmittance;
+            transmittance *= 1.0 - stepAlpha;
+            t += stepSize;
+        } else {
+            // Empty-space acceleration only below ULTRA; ULTRA takes the
+            // uncompromising uniform-step path.
+            t += stepSize * emptyMultiplier;
+        }
     }
 
     float alpha = 1.0 - transmittance;
     if (alpha < 0.005) {
-        discard;
+        fragColor = vec4(0.0);
+        return;
     }
 
-    // Smooth horizon and distance fading
-    float horizonFade = smoothstep(0.0, 0.15, abs(rayDirection.y));
-    float distanceFade = 1.0 - smoothstep(drawDistance * 0.65, drawDistance, farDistance);
-    alpha *= mix(0.4, 1.0, horizonFade) * max(0.5, distanceFade);
+    float horizonFade = smoothstep(0.0, 0.10, abs(rayDir.y));
+    float distanceFade = 1.0 - smoothstep(drawDistance * 0.75, drawDistance, tFar);
+    alpha *= mix(0.55, 1.0, horizonFade) * distanceFade;
 
-    // Blend with atmospheric scattering
-    vec3 atmospheric = mix(horizonColor, skyColor, clamp(rayDirection.y * 2.5, 0.0, 1.0));
-    accumulated = mix(atmospheric * alpha * 0.3, accumulated, clamp(alpha * 1.3, 0.0, 1.0));
-    
-    gl_FragColor = vec4(accumulated, alpha);
+    // Convert the premultiplied scattering integral to straight alpha.
+    vec3 color = scattered / max(alpha, 1e-4);
+    vec3 atmospheric = mix(
+        horizonColor, skyColor, clamp(rayDir.y * 2.5, 0.0, 1.0));
+    color = mix(atmospheric, color, clamp(alpha * 1.5, 0.0, 1.0));
+
+    fragColor = vec4(color, alpha);
 }
 """
 
 
 class Clouds:
     CLOUD_BASE = 88.0
-    CLOUD_TOP = 112.0
+    CLOUD_TOP = 128.0
     CLOUD_HEIGHT = 96.0
     DRAW_DISTANCE = 360.0
     GRID_RADIUS = 7
     GRID_SPACING = 40.0
     WIND_SPEED = 1.5
+
+    QUALITY_LEVELS = {
+        "LOW": 0,
+        "MEDIUM": 1,
+        "HIGH": 2,
+        "ULTRA": 3,
+        "INSANE": 4,
+    }
 
     def __init__(self, gl):
         self.gl = gl
@@ -246,9 +498,16 @@ class Clouds:
         self.weather_strength = 0.0
         self.clusters = self._build_clusters()
         self.texture = self._build_puff_texture()
-        self.volume_shader = None
+        self.volume_shader = 0
         self.volume_uniforms = {}
+        self.volume_vao = 0
+        self.volume_vbo = 0
+        self.volume_quality = self._resolve_quality()
         self._initialize_volume_shader()
+
+    def _resolve_quality(self):
+        quality = str(getattr(settings, "CLOUD_QUALITY", "ULTRA")).upper()
+        return self.QUALITY_LEVELS.get(quality, 3)
 
     @property
     def shadow_offset(self):
@@ -265,12 +524,22 @@ class Clouds:
         self.weather_strength = max(0.0, min(1.0, float(strength)))
         self.coverage = min(0.82, self.base_coverage + self.weather_strength * 0.24)
 
+    def set_quality(self, quality):
+        """Switch cloud quality at runtime. Unknown values select LOW."""
+        level = self.QUALITY_LEVELS.get(str(quality).upper(), 0)
+        self.volume_quality = level
+
     def render(self, player, cycle):
         light = getattr(self.gl, "light", None)
         if self.volume_shader and light is not None and light.enabled:
-            self._render_volume(player, cycle)
-        else:
-            self._render_puffs(player, cycle)
+            try:
+                self._render_volume(player, cycle)
+                return
+            except Exception as error:
+                # Driver lost the context, VAO unsupported at runtime, etc.
+                print(f"Warning: volumetric clouds disabled ({error})")
+                self.volume_shader = 0
+        self._render_puffs(player, cycle)
 
     def _render_volume(self, player, cycle):
         yaw = math.radians(player.rotation[1])
@@ -279,11 +548,37 @@ class Clouds:
         sin_pitch = math.sin(pitch)
         sin_yaw = math.sin(yaw)
         cos_yaw = math.cos(yaw)
+
+        # Camera basis vectors matching the player's yaw/pitch.
         forward = (sin_yaw * cos_pitch, -sin_pitch, -cos_yaw * cos_pitch)
         right = (cos_yaw, 0.0, sin_yaw)
         up = (sin_yaw * sin_pitch, cos_pitch, -cos_yaw * sin_pitch)
 
-        glPushAttrib(GL_ENABLE_BIT | GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT | GL_CURRENT_BIT)
+        px, _, pz = player.position
+        # The vertical slab is the real volume. A generous horizontal extent
+        # keeps the AABB from cutting the cloud layer off at a visible square
+        # edge; drawDistance still bounds the actual ray march.
+        half_extent = self.DRAW_DISTANCE * 2.0
+        box_min = (px - half_extent, self.CLOUD_BASE, pz - half_extent)
+        box_max = (px + half_extent, self.CLOUD_TOP, pz + half_extent)
+
+        # Neutral white at noon, warm at sunset, dim blue-grey at night.
+        daylight = float(cycle.sky_brightness)
+        horizon = np.asarray(cycle.horizon_color, dtype=np.float32)
+        warmth = max(0.0, min(
+            1.0, (float(horizon[0]) - float(horizon[2])) * 2.0 + 0.15))
+        neutral = (
+            np.array((0.10, 0.11, 0.14), dtype=np.float32)
+            + np.array((0.90, 0.86, 0.72), dtype=np.float32) * daylight
+        )
+        warm = np.array((1.0, 0.45, 0.18), dtype=np.float32)
+        sun_color = neutral * (1.0 - warmth * 0.45) + warm * (warmth * 0.45)
+        sun_color = tuple(
+            float(component)
+            for component in np.clip(sun_color, 0.0, 1.0))
+
+        glPushAttrib(GL_ENABLE_BIT | GL_DEPTH_BUFFER_BIT
+                     | GL_COLOR_BUFFER_BIT | GL_CURRENT_BIT)
         glMatrixMode(GL_PROJECTION)
         glPushMatrix()
         glLoadIdentity()
@@ -302,25 +597,30 @@ class Clouds:
             self._uniform3("cameraRight", right)
             self._uniform3("cameraUp", up)
             self._uniform3("sunDirection", cycle.light_direction)
+            self._uniform3("sunColor", sun_color)
             self._uniform3("skyColor", cycle.zenith_color)
             self._uniform3("horizonColor", cycle.horizon_color)
+            self._uniform3("cloudBoxMin", box_min)
+            self._uniform3("cloudBoxMax", box_max)
             self._uniform2("windOffset", self.shadow_offset)
             self._uniform1("aspectRatio", self.gl.WIDTH / self.gl.HEIGHT)
-            self._uniform1("tanHalfFov", math.tan(math.radians(self.gl.fov) / 2))
+            self._uniform1("tanHalfFov",
+                           math.tan(math.radians(self.gl.fov) / 2))
             self._uniform1("coverage", self.coverage)
             self._uniform1("weatherStrength", self.weather_strength)
             self._uniform1("daylight", cycle.sky_brightness)
-            self._uniform1("gameTime", getattr(getattr(self.gl, "light", None), "elapsed", 0.0))
+            self._uniform1(
+                "gameTime",
+                getattr(getattr(self.gl, "light", None), "elapsed", 0.0))
             self._uniform1("drawDistance", self.DRAW_DISTANCE)
             self._uniform1("cloudBase", self.CLOUD_BASE)
             self._uniform1("cloudTop", self.CLOUD_TOP)
+            glUniform1i(
+                self.volume_uniforms["qualityLevel"], self.volume_quality)
 
-            glBegin(GL_QUADS)
-            glTexCoord2f(0, 0); glVertex2f(-1, -1)
-            glTexCoord2f(1, 0); glVertex2f(1, -1)
-            glTexCoord2f(1, 1); glVertex2f(1, 1)
-            glTexCoord2f(0, 1); glVertex2f(-1, 1)
-            glEnd()
+            glBindVertexArray(self.volume_vao)
+            glDrawArrays(GL_TRIANGLES, 0, 3)
+            glBindVertexArray(0)
         finally:
             glUseProgram(0)
             glDepthMask(GL_TRUE)
@@ -365,8 +665,12 @@ class Clouds:
             0.31 + daylight * (0.69 - self.weather_strength * 0.32),
         )
 
-        glPushAttrib(GL_ENABLE_BIT | GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT | GL_CURRENT_BIT)
+        glPushAttrib(GL_ENABLE_BIT | GL_DEPTH_BUFFER_BIT
+                     | GL_COLOR_BUFFER_BIT | GL_CURRENT_BIT)
         try:
+            # TextureGroup binds on unit 0; select it before enabling the
+            # target in case the lighting pass left another unit active.
+            glActiveTexture(GL_TEXTURE0)
             glEnable(GL_TEXTURE_2D)
             glEnable(GL_BLEND)
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
@@ -378,10 +682,14 @@ class Clouds:
                 rx, ry, rz = (component * size for component in right)
                 ux, uy, uz = (component * size * 0.62 for component in up)
                 glColor4f(*color, opacity)
-                glTexCoord2f(0, 0); glVertex3f(cx - rx - ux, cy - ry - uy, cz - rz - uz)
-                glTexCoord2f(1, 0); glVertex3f(cx + rx - ux, cy + ry - uy, cz + rz - uz)
-                glTexCoord2f(1, 1); glVertex3f(cx + rx + ux, cy + ry + uy, cz + rz + uz)
-                glTexCoord2f(0, 1); glVertex3f(cx - rx + ux, cy - ry + uy, cz - rz + uz)
+                glTexCoord2f(0, 0)
+                glVertex3f(cx - rx - ux, cy - ry - uy, cz - rz - uz)
+                glTexCoord2f(1, 0)
+                glVertex3f(cx + rx - ux, cy + ry - uy, cz + rz - uz)
+                glTexCoord2f(1, 1)
+                glVertex3f(cx + rx + ux, cy + ry + uy, cz + rz + uz)
+                glTexCoord2f(0, 1)
+                glVertex3f(cx - rx + ux, cy - ry + uy, cz - rz + uz)
             glEnd()
             self.texture.unset_state_recursive()
         finally:
@@ -390,31 +698,65 @@ class Clouds:
 
     def _initialize_volume_shader(self):
         try:
-            self.volume_shader = compileProgram(
+            shader = compileProgram(
                 compileShader(CLOUD_VERTEX_SHADER, GL_VERTEX_SHADER),
                 compileShader(CLOUD_FRAGMENT_SHADER, GL_FRAGMENT_SHADER),
             )
             names = (
                 "cameraPosition", "cameraForward", "cameraRight", "cameraUp",
-                "sunDirection", "skyColor", "horizonColor", "windOffset",
+                "sunDirection", "sunColor", "skyColor", "horizonColor",
+                "cloudBoxMin", "cloudBoxMax", "windOffset",
                 "aspectRatio", "tanHalfFov", "coverage", "weatherStrength",
                 "daylight", "gameTime", "drawDistance", "cloudBase", "cloudTop",
+                "qualityLevel",
             )
             self.volume_uniforms = {
-                name: glGetUniformLocation(self.volume_shader, name) for name in names
+                name: glGetUniformLocation(shader, name) for name in names
             }
+
+            # Full-screen triangle: three vertices cover the clip-space quad.
+            # Each vertex is (x, y, u, v).
+            vertices = np.array([
+                -1.0, -1.0, 0.0, 0.0,
+                 3.0, -1.0, 2.0, 0.0,
+                -1.0,  3.0, 0.0, 2.0,
+            ], dtype=np.float32)
+
+            vao = GLuint()
+            vbo = GLuint()
+            glGenVertexArrays(1, vao)
+            glGenBuffers(1, vbo)
+            glBindVertexArray(vao)
+            glBindBuffer(GL_ARRAY_BUFFER, vbo)
+            glBufferData(GL_ARRAY_BUFFER, vertices.nbytes, vertices,
+                         GL_STATIC_DRAW)
+            glEnableVertexAttribArray(0)
+            glVertexAttribPointer(
+                0, 2, GL_FLOAT, GL_FALSE, 16, ctypes.c_void_p(0))
+            glEnableVertexAttribArray(1)
+            glVertexAttribPointer(
+                1, 2, GL_FLOAT, GL_FALSE, 16, ctypes.c_void_p(8))
+            glBindVertexArray(0)
+            glBindBuffer(GL_ARRAY_BUFFER, 0)
+
+            self.volume_shader = shader
+            self.volume_vao = vao.value
+            self.volume_vbo = vbo.value
         except Exception as error:
             print(f"Warning: volumetric clouds unavailable ({error})")
             self.volume_shader = 0
+            self.volume_uniforms = {}
 
     def _uniform1(self, name, value):
         glUniform1f(self.volume_uniforms[name], float(value))
 
     def _uniform2(self, name, values):
-        glUniform2f(self.volume_uniforms[name], float(values[0]), float(values[1]))
+        glUniform2f(self.volume_uniforms[name],
+                    float(values[0]), float(values[1]))
 
     def _uniform3(self, name, values):
-        glUniform3f(self.volume_uniforms[name], float(values[0]), float(values[1]), float(values[2]))
+        glUniform3f(self.volume_uniforms[name],
+                    float(values[0]), float(values[1]), float(values[2]))
 
     def _build_clusters(self):
         rng = random.Random(32917)
@@ -430,9 +772,13 @@ class Clouds:
                 for _ in range(rng.randint(5, 9)):
                     angle = rng.uniform(0, math.tau)
                     radius = rng.uniform(0, 13)
-                    puffs.append((math.cos(angle) * radius, rng.uniform(-2.5, 3.5),
-                                  math.sin(angle) * radius, rng.uniform(8, 15),
-                                  rng.uniform(0.22, 0.42)))
+                    puffs.append((
+                        math.cos(angle) * radius,
+                        rng.uniform(-2.5, 3.5),
+                        math.sin(angle) * radius,
+                        rng.uniform(8, 15),
+                        rng.uniform(0.22, 0.42),
+                    ))
                 clusters.append((base_x, base_z, height, tuple(puffs)))
         return tuple(clusters)
 
@@ -449,8 +795,10 @@ class Clouds:
                          + math.sin(x * 0.19 - y * 0.57)) * 0.035
                 alpha = max(0.0, min(1.0, edge + noise))
                 offset = (y * size + x) * 4
-                pixels[offset:offset + 4] = bytes((255, 255, 255, round(alpha * 255)))
-        image = pyglet.image.ImageData(size, size, "RGBA", bytes(pixels), pitch=size * 4)
+                pixels[offset:offset + 4] = bytes(
+                    (255, 255, 255, round(alpha * 255)))
+        image = pyglet.image.ImageData(
+            size, size, "RGBA", bytes(pixels), pitch=size * 4)
         texture = image.get_texture()
         glBindTexture(texture.target, texture.id)
         glTexParameteri(texture.target, GL_TEXTURE_MIN_FILTER, GL_LINEAR)

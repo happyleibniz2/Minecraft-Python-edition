@@ -1,0 +1,6 @@
+{
+  "id": "vesna",
+  "version": "1.0.0",
+  "dependencies": [],
+  "entry": "mod.py"
+}

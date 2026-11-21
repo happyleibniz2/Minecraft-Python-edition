@@ -1,11 +1,20 @@
+# Must run before settings imports pyglet.font (which imports pyglet.gl):
+# pyglet 2.x creates a hidden 1x1 shadow window and a second GL context
+# otherwise, and the game must own exactly one window/context.
+import pyglet
+pyglet.options['shadow_window'] = False
+
 import os
 import time
 from random import randint
 
-import pygame.display
-import pyglet
 from OpenGL.GL import *
 from settings import *
+
+# Installs the pyglet 2.x fixed-function shims for Texture.blit and
+# TextLayout.draw.  Importing it here guarantees the shims exist before any
+# label or image is drawn, including direct Label.draw() calls.
+import game.graphics  # noqa: F401
 
 # Reusable pyglet.text.Label pairs keyed by the owning GL context. The label
 # pool exists to remove the hundreds of short-lived Label allocations that
@@ -182,6 +191,28 @@ def adjacent(x, y, z):
     for p in ((x - 1, y, z), (x + 1, y, z), (x, y - 1, z), (x, y + 1, z), (x, y, z - 1), (x, y, z + 1)): yield p
 
 
+def _sync_info_label(target, text, size, x, y, anchor_x, anchor_y):
+    """Apply layout-affecting properties only when they changed.
+
+    pyglet 2.x reruns the DWrite layout whenever ``text`` is assigned, even
+    for an identical string.  Menu labels are redrawn every frame, so
+    unconditional assignment made the first frame take seconds and kept
+    later frames needlessly expensive.
+    """
+    if target.text != text:
+        target.text = text
+    if target.font_size != size:
+        target.font_size = size
+    if target.x != x:
+        target.x = x
+    if target.y != y:
+        target.y = y
+    if target.anchor_x != anchor_x:
+        target.anchor_x = anchor_x
+    if target.anchor_y != anchor_y:
+        target.anchor_y = anchor_y
+
+
 def drawInfoLabel(gl, text, xx=0, yy=0, style=None, size=15, anchor_x='left', anchor_y='baseline', opacity=1, rotate=0,
                   label_color=(255, 255, 255), shadow_color=(56, 56, 56), scale=0, shadow=True):
     if style is None:
@@ -206,27 +237,31 @@ def drawInfoLabel(gl, text, xx=0, yy=0, style=None, size=15, anchor_x='left', an
 
         for target, tx, ty in ((shadow_lbl, ix, iy),
                                (lbl, ix - ms, iy + ms)):
-            target.text = line
-            target.font_size = size
-            target.x = tx
-            target.y = ty
-            target.anchor_x = anchor_x
-            target.anchor_y = anchor_y
+            _sync_info_label(
+                target, line, size, tx, ty, anchor_x, anchor_y
+            )
 
-        if not style:
-            lbl.set_style("background_color", (69, 69, 69, 100))
-        else:
-            for st in style:
-                lbl.set_style(st[0], st[1])
-                shadow_lbl.set_style(st[0], st[1])
-        lbl.set_style("color", label_rgba)
-        shadow_lbl.set_style("color", shadow_rgba)
+        style_key = (tuple(style), label_rgba, shadow_rgba)
+        if getattr(lbl, "_game_label_style", None) != style_key:
+            if not style:
+                lbl.set_style("background_color", (69, 69, 69, 100))
+            else:
+                for st in style:
+                    lbl.set_style(st[0], st[1])
+                    shadow_lbl.set_style(st[0], st[1])
+            lbl.set_style("color", label_rgba)
+            shadow_lbl.set_style("color", shadow_rgba)
+            lbl._game_label_style = style_key
+            shadow_lbl._game_label_style = style_key
 
         glPushMatrix()
         if rotate:
             glRotatef(rotate, 0.0, 0.0, 1.0)
         if scale:
             glScalef(scale, scale, 0)
+        # game.graphics patches TextLayout.draw to copy the current
+        # projection/modelview into pyglet's window uniforms, so the label
+        # follows the rotation/scale above without a local sync here.
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
         if shadow:

@@ -36,11 +36,12 @@ class Frustum:
         # Front plane
         self.planes[5] = clip[3] + clip[2]
 
-        # Normalize each plane
-        for i in range(6):
-            mag = np.sqrt(self.planes[i][0]**2 + self.planes[i][1]**2 + self.planes[i][2]**2)
-            if mag != 0:
-                self.planes[i] /= mag
+        # Normalize all six planes in one pass.  The previous loop issued a
+        # NumPy call per plane; this is one vector operation for the frame.
+        magnitudes = np.sqrt(np.sum(self.planes[:, :3] ** 2, axis=1))
+        nonzero = magnitudes != 0
+        if np.any(nonzero):
+            self.planes[nonzero] /= magnitudes[nonzero, None]
 
     def cube_in_frustum(self, x0, y0, z0, x1, y1, z1):
         """
@@ -56,3 +57,32 @@ class Frustum:
                     < -self.CULLING_MARGIN):
                 return False
         return True
+
+    def cube_in_frustum_batch(self, bounds):
+        """Cull many AABBs at once.
+
+        ``bounds`` is an ``(N, 6)`` array of ``(x0, y0, z0, x1, y1, z1)``.
+        Returns a boolean array with one entry per box.  This replaces the
+        per-chunk Python plane loop in the renderer with a handful of NumPy
+        operations, which is especially noticeable at large render distances.
+        """
+        bounds = np.asarray(bounds, dtype=np.float32)
+        if bounds.size == 0:
+            return np.zeros(0, dtype=bool)
+        if bounds.ndim == 1:
+            bounds = bounds.reshape(1, 6)
+
+        planes = self.planes
+        # For each plane pick the AABB corner farthest along the plane normal.
+        positive = planes[:, :3] >= 0.0
+        x = np.where(positive[None, :, 0], bounds[:, 3][:, None],
+                     bounds[:, 0][:, None])
+        y = np.where(positive[None, :, 1], bounds[:, 4][:, None],
+                     bounds[:, 1][:, None])
+        z = np.where(positive[None, :, 2], bounds[:, 5][:, None],
+                     bounds[:, 2][:, None])
+        distances = (x * planes[None, :, 0]
+                     + y * planes[None, :, 1]
+                     + z * planes[None, :, 2]
+                     + planes[None, :, 3])
+        return np.all(distances >= -self.CULLING_MARGIN, axis=1)

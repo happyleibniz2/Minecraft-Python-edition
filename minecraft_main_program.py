@@ -1,3 +1,10 @@
+# Must run before any pyglet.gl/pyglet.window import.  pyglet 2.x otherwise
+# creates a hidden 1x1 shadow window and GL context just from importing
+# pyglet.gl, and the game must own exactly one window/context.
+import pyglet
+pyglet.options['shadow_window'] = False
+pyglet.options['debug_gl'] = False
+
 import datetime
 import logging
 import gc
@@ -7,9 +14,9 @@ import pickle
 import sys
 import time
 from random import randint
-import pygame.time
-import pyglet
-from pygame._sdl2 import Window as SDLWindow
+
+import pyglet.display
+from pyglet.window import key
 from OpenGL.GL import *
 from OpenGL.raw.GLU import gluOrtho2D
 from functions import drawInfoLabel, getElpsTime, translateSeed
@@ -18,9 +25,12 @@ from game.GUI.Editarea import Editarea
 from game.GUI.GUI import GUI
 from game.GUI.Sliderbox import Sliderbox
 from game.entity.Player import Player
+from game.host import PygletHost
 from game.sound.BlockSound import BlockSound
 from game.sound.Sound import Sound
+from game.sound.audio import load_sound, shutdown_audio
 from game.Scene import Scene
+from game.TouchControls import TouchControls
 from game.world.Biomes import getBiomeByTemp
 from game.world.worldGenerator import worldGenerator
 from settings import *
@@ -36,30 +46,31 @@ logging.basicConfig(
 )
 
 lang_choose = ["en", "zh"]
-pyglet.options['debug_gl'] = False
 
 def log_deb(msg):
     logging.debug(msg)
 
 
-def create_opengl_display(size, flags):
-    """Create every GL context with a safe 4x-MSAA fallback."""
-    pygame.display.gl_set_attribute(pygame.GL_DEPTH_SIZE, 24)
-    # Always request a multisample-capable framebuffer so the setting can be
-    # toggled at runtime; Scene.setAntialiasing controls whether it is active.
-    samples = 4
-    pygame.display.gl_set_attribute(pygame.GL_MULTISAMPLEBUFFERS, 1)
-    pygame.display.gl_set_attribute(pygame.GL_MULTISAMPLESAMPLES, samples)
-    try:
-        return pygame.display.set_mode(size, flags, vsync=1)
-    except pygame.error:
-        if not samples:
-            raise
-        logging.warning("4x MSAA context unavailable; retrying without multisampling")
-        pygame.display.gl_set_attribute(pygame.GL_MULTISAMPLEBUFFERS, 0)
-        pygame.display.gl_set_attribute(pygame.GL_MULTISAMPLESAMPLES, 0)
-        settings.set_anti_aliasing(False)
-        return pygame.display.set_mode(size, flags, vsync=1)
+def create_host(size):
+    """Create the single pyglet window/GL context with an MSAA fallback."""
+    host = PygletHost(
+        size[0], size[1],
+        caption=f"Minecraft {MC_VERSION} {clock.get_fps()}",
+    )
+    if host.msaa_samples == 0:
+        logging.warning("4x MSAA context unavailable; multisampling disabled")
+        if settings.ANTI_ALIASING:
+            settings.set_anti_aliasing(False)
+    return host
+
+
+def on_host_resize(width, height):
+    global WIDTH, HEIGHT, resizeEvent
+    WIDTH, HEIGHT = width, height
+    resizeEvent = True
+    if scene is not None:
+        scene.resizeCGL(width, height)
+
 
 def choose_langs():
     global lang_choose, mainFunction, translations
@@ -79,6 +90,8 @@ def choose_langs():
 
 def respawn():
     log_deb("respawning...")
+    if scene.touchControls is not None:
+        scene.touchControls.reset()
     pause()
     log_deb("setting player health point...")
     player.hp = 20
@@ -131,7 +144,7 @@ def quit_to_menu():
             tex2.blit(scene_x, scene_y)
     drawInfoLabel(scene, translations["quit.mainmenu"], xx=scene.WIDTH // 2, yy=scene.HEIGHT // 2,
                   style=[('', '')], size=12, anchor_x='center')
-    pygame.display.flip()
+    host.flip()
     clock.tick(MAX_FPS)
 
     PAUSE = True
@@ -181,6 +194,13 @@ def cycle_shadow_quality():
     quality = qualities[(current + 1) % len(qualities)]
     settings.set_shadow_quality(quality)
     scene.light.set_shadow_quality(quality)
+
+def cycle_cloud_quality():
+    qualities = ("LOW", "MEDIUM", "HIGH", "ULTRA", "INSANE")
+    current = qualities.index(settings.CLOUD_QUALITY)
+    quality = qualities[(current + 1) % len(qualities)]
+    settings.set_cloud_quality(quality)
+    scene.clouds.set_quality(quality)
 
 def toggle_anti_aliasing():
     enabled = not settings.ANTI_ALIASING
@@ -245,12 +265,15 @@ def death_screen():
 
 def draw_command(mc):
     scene.set2d()
-    mp = pygame.mouse.get_pos()
-    _keys = pygame.key.get_pressed()
+    mp = host.mouse_pos
+    # Use the key presses collected for this frame.  The old
+    # pygame.key.get_pressed() object iterated booleans rather than key codes,
+    # so the command line never actually received characters.
+    _keys = handler.keys
     commandEditArea.x = scene.WIDTH // 2 - (commandEditArea.bg.width // 2)
     commandEditArea.y = scene.HEIGHT // 2 - (commandEditArea.bg.height // 2)
     commandEditArea.update(mp, mc, _keys)
-    pygame.display.flip()
+    host.flip()
     clock.tick(MAX_FPS)
 
 def draw_panorama_menu(mc):
@@ -280,7 +303,7 @@ def draw_panorama_menu(mc):
         for iy in range(0, scene.HEIGHT, tex.height):
             tex.blit(ix, iy)
             tex2.blit(ix, iy)
-    mp = pygame.mouse.get_pos()
+    mp = host.mouse_pos
     Pa1Button = Button(scene, "Mc 1.6.x Panorama", 0, 0, text_x=scene.WIDTH // 7)
     Pa1Button.setEvent(cpt_16x)
     Pa1Button.x = scene.WIDTH // 7 - (Pa1Button.button.width // 3.5)
@@ -304,7 +327,7 @@ def draw_panorama_menu(mc):
     closeSettingsButton.x = scene.WIDTH // 2 - (closeSettingsButton.button.width // 2)
     closeSettingsButton.y = scene.HEIGHT // 2 - (closeSettingsButton.button.height // 2) + 180
     closeSettingsButton.update(mp, mc)
-    pygame.display.flip()
+    host.flip()
 
 def draw_settings_menu(mc):
     scene.set2d()
@@ -314,7 +337,7 @@ def draw_settings_menu(mc):
         for iy in range(0, scene.HEIGHT, tex.height):
             tex.blit(ix, iy)
             tex2.blit(ix, iy)
-    mp = pygame.mouse.get_pos()
+    mp = host.mouse_pos
 
     soundVolumeSliderBox.x = scene.WIDTH // 2 - (soundVolumeSliderBox.bg.width // 2) - 170
     soundVolumeSliderBox.y = scene.HEIGHT // 2 - (soundVolumeSliderBox.bg.height // 2) - 180
@@ -322,7 +345,7 @@ def draw_settings_menu(mc):
 
     seedEditArea.x = scene.WIDTH // 2 - (seedEditArea.bg.width // 2) - 170
     seedEditArea.y = scene.HEIGHT // 2 - (seedEditArea.bg.height // 2) - 130
-    seedEditArea.update(mp, mc, keys)
+    seedEditArea.update(mp, mc, handler.keys)
 
     editPanoramaButton = Button(scene, translations['ed.pano'], 0, 0, text_x=scene.WIDTH // 2 - (400 // 2))
     editPanoramaButton.setEvent(edit_panorama)
@@ -361,7 +384,7 @@ def draw_settings_menu(mc):
     sound.musicPlayer.set_volume(soundVolumeSliderBox.val / 100)
     sound.volume = soundVolumeSliderBox.val / 100
 
-    pygame.display.flip()
+    host.flip()
 
 def draw_death_screen(mc):
     scene.set2d()
@@ -369,7 +392,7 @@ def draw_death_screen(mc):
     bg.width = scene.WIDTH
     bg.height = scene.HEIGHT
     bg.blit(0, 0)
-    mp = pygame.mouse.get_pos()
+    mp = host.mouse_pos
     drawInfoLabel(scene, translations["player dead"], xx=scene.WIDTH // 2,
                   yy=scene.HEIGHT - scene.HEIGHT // 4, style=[('', '')],
                   size=34, anchor_x='center')
@@ -380,7 +403,7 @@ def draw_death_screen(mc):
     quitWorldButton.x = scene.WIDTH // 2 - (quitButton.button.width // 2)
     quitWorldButton.y = scene.HEIGHT // 2 - (quitButton.button.height // 2)
     quitWorldButton.update(mp, mc)
-    pygame.display.flip()
+    host.flip()
 
 def pause_menu(mc):
     scene.set2d()
@@ -388,7 +411,7 @@ def pause_menu(mc):
     bg.width = scene.WIDTH
     bg.height = scene.HEIGHT
     bg.blit(0, 0)
-    mp = pygame.mouse.get_pos()
+    mp = host.mouse_pos
     drawInfoLabel(scene, translations["game.menu"], xx=scene.WIDTH // 2, yy=scene.HEIGHT - scene.HEIGHT // 4,
                   style=[('', '')], size=12, anchor_x='center')
     resumeButton.x = scene.WIDTH // 2 - (resumeButton.button.width // 2)
@@ -398,7 +421,7 @@ def pause_menu(mc):
     quitWorldButton.x = scene.WIDTH // 2 - (quitButton.button.width // 2)
     quitWorldButton.y = scene.HEIGHT // 2 - (quitButton.button.height // 2)
     quitWorldButton.update(mp, mc)
-    pygame.display.flip()
+    host.flip()
 
 def gen_world(mc):
     global IN_MENU, PAUSE, resizeEvent
@@ -446,7 +469,7 @@ def gen_world(mc):
                   size=12, anchor_x='center')
     drawInfoLabel(scene, translations["gen.terrain"] + f" {proc}%...", xx=scene.WIDTH // 2, yy=scene.HEIGHT // 2 - 39,
                   style=[('', '')], size=12, anchor_x='center')
-    pygame.display.flip()
+    host.flip()
 
 def draw_main_menu(mc):
     global mainMenuRotation, IN_MENU, PAUSE
@@ -466,7 +489,7 @@ def draw_main_menu(mc):
     scene.drawPanorama()
     glPopMatrix()
     scene.set2d()
-    mp = pygame.mouse.get_pos()
+    mp = host.mouse_pos
     tex = gui.GUI_TEXTURES["game_logo"]
     tex.blit(scene.WIDTH // 2 - (tex.width // 2), scene.HEIGHT - tex.height - (scene.HEIGHT // 15))
     drawInfoLabel(scene, f"Minecraft {MC_VERSION}", xx=10, yy=10, style=[('', '')], size=12)
@@ -483,7 +506,7 @@ def draw_main_menu(mc):
     quitButton_ = Button(scene, translations["quit_game"], 0, 0, button=gui.GUI_TEXTURES["button_bg_half"],
                          button_hovered=gui.GUI_TEXTURES["button_bg_hover_half"],
                          text_x=scene.WIDTH // 2 - (200 // 2) + 200)
-    quitButton_.setEvent(sys.exit)
+    quitButton_.setEvent(quit_game)
     quitButton_.x = scene.WIDTH // 2 - (quitButton_.button.width // 2) + 100
     quitButton_.y = scene.HEIGHT // 2 - (quitButton_.button.height // 2) + 125
     quitButton_.update(mp, mc)
@@ -498,7 +521,7 @@ def draw_main_menu(mc):
     drawInfoLabel(scene, splash, xx=1, yy=1, style=[('', '')], scale=var8, size=30, anchor_x='center',
                   label_color=(255, 255, 0), shadow_color=(63, 63, 0))
     glPopMatrix()
-    pygame.display.flip()
+    host.flip()
 
 def draw_shader_settings_menu(mc):
     """Dedicated blank page for the Zentra shader controls."""
@@ -510,7 +533,7 @@ def draw_shader_settings_menu(mc):
             background.blit(ix, iy)
             shade.blit(ix, iy)
 
-    mp = pygame.mouse.get_pos()
+    mp = host.mouse_pos
     drawInfoLabel(scene, "Shader Settings", xx=scene.WIDTH // 2,
                   yy=scene.HEIGHT - 42, style=[('', '')], size=18,
                   anchor_x='center')
@@ -529,6 +552,7 @@ def draw_shader_settings_menu(mc):
     options = (
         (f"Shaders: {'YES' if settings.SHADERS else 'NO'}", toggle_shaders),
         (f"Shadow Quality: {settings.SHADOW_QUALITY}", cycle_shadow_quality),
+        (f"Cloud Quality: {settings.CLOUD_QUALITY}", cycle_cloud_quality),
         (f"Anti-Aliasing: {'YES' if settings.ANTI_ALIASING else 'NO'}", toggle_anti_aliasing),
         (f"Dynamic Lighting: {'YES' if settings.DYNAMIC_LIGHTING else 'NO'}", toggle_dynamic_lighting),
         (f"Player Shadows: {'YES' if settings.PLAYER_SHADOWS else 'NO'}", toggle_player_shadows),
@@ -538,7 +562,7 @@ def draw_shader_settings_menu(mc):
         button = Button(scene, text, 0, 0, text_x=center_x)
         button.setEvent(callback)
         button.x = button_x
-        button.y = scene.HEIGHT // 2 - 135 + index * 45
+        button.y = scene.HEIGHT // 2 - 150 + index * 42
         button.update(mp, mc)
 
     back_button = Button(scene, "Back", 0, 0)
@@ -547,24 +571,12 @@ def draw_shader_settings_menu(mc):
     back_button.y = scene.HEIGHT // 2 + 145
     back_button.update(mp, mc)
 
-    pygame.display.flip()
+    host.flip()
     pyglet.gl.glViewport(0, 0, WIDTH, HEIGHT)
 
 if settings.DEBUG:
     log_deb(f"PyOpenGL version: {OpenGL.__version__}")
     log_deb(f"PyOpenGL platform: {OpenGL.platform}")
-    log_deb(f"PyOpenGL extensions: {OpenGL.GL.glGetString(OpenGL.GL.GL_EXTENSIONS)}", )
-    log_deb(f"PyOpenGL renderer: {OpenGL.GL.glGetString(OpenGL.GL.GL_RENDERER)}")
-    log_deb(f"PyOpenGL vendor: {OpenGL.GL.glGetString(OpenGL.GL.GL_VENDOR)}")
-    log_deb(f"PyOpenGL GL version: {OpenGL.GL.glGetString(OpenGL.GL.GL_VERSION)}")
-    log_deb(f"Pygame Version:{pygame.version.ver}")
-    log_deb(f"Pygame array interface:{pygame.get_array_interface}")
-    log_deb(f"Pygame display driver:{pygame.display.get_driver()}")
-    log_deb(f"Pygame display info:{pygame.display.Info()}")
-    log_deb(f"Pyglet version:{pyglet.version}", )
-    log_deb(f"Pyglet platform:{pyglet.compat_platform}")
-    log_deb(f"Pyglet display driver:{pyglet.canvas.get_display()}")
-    log_deb(f"Pyglet display info:{pyglet.canvas.get_display().get_default_screen()}")
     log_deb(f"Python Version:{sys.version}")
     log_deb(f"Python Platform:{sys.platform}")
     log_deb(f"Python Path:{sys.path}")
@@ -576,12 +588,23 @@ logging.info("Loading the game...")
 
 resizeEvent = False
 LAST_SAVED_RESOLUTION = [WIDTH, HEIGHT]
-pygame.mixer.pre_init(44100, 16, 2, 4096)
-screen = create_opengl_display(
-    (WIDTH, HEIGHT), pygame.DOUBLEBUF | pygame.OPENGL | pygame.RESIZABLE
-)
-sdl_window = SDLWindow.from_display_module()
+scene = None
+host = create_host((WIDTH, HEIGHT))
+host.resize_callback = on_host_resize
 fullscreen = False
+
+if settings.DEBUG:
+    host.window.switch_to()
+    log_deb(f"Pyglet version:{pyglet.version}")
+    log_deb(f"Pyglet platform:{pyglet.compat_platform}")
+    log_deb(f"Pyglet display driver:{pyglet.display.get_display()}")
+    log_deb(f"Pyglet display info:{pyglet.display.get_display().get_default_screen()}")
+    log_deb(f"Window size:{host.size}")
+    log_deb(f"Window MSAA samples:{host.msaa_samples}")
+    log_deb(f"PyOpenGL extensions: {OpenGL.GL.glGetString(OpenGL.GL.GL_EXTENSIONS)}")
+    log_deb(f"PyOpenGL renderer: {OpenGL.GL.glGetString(OpenGL.GL.GL_RENDERER)}")
+    log_deb(f"PyOpenGL vendor: {OpenGL.GL.glGetString(OpenGL.GL.GL_VENDOR)}")
+    log_deb(f"PyOpenGL GL version: {OpenGL.GL.glGetString(OpenGL.GL.GL_VERSION)}")
 
 glClearColor(1, 1, 1, 1)
 glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
@@ -591,10 +614,32 @@ glLoadIdentity()
 gluOrtho2D(0, WIDTH, 0, HEIGHT)
 logo = pyglet.resource.image("gui/mojang_studios.jpg")
 logo.blit(WIDTH // 2 - (logo.width // 2), HEIGHT // 2 - (logo.height // 2))
-pygame.display.flip()
+host.flip()
 
 sound = Sound()
+
+
+def quit_game(*_args):
+    """Release the single GL context and exit cleanly.
+
+    Audio is disabled in this build, so ``sound.shutdown()`` /
+    ``shutdown_audio()`` are no-ops kept for API compatibility.
+    """
+    try:
+        sound.shutdown()
+    except Exception:
+        logging.exception("Error while closing audio")
+    try:
+        shutdown_audio()
+    except Exception:
+        logging.exception("Error while shutting down the audio stub")
+    host.close()
+    pyglet.app.exit()
+    sys.exit(0)
+
+
 scene = Scene()
+scene.host = host
 gui = GUI(scene)
 blockSound = BlockSound(scene)
 player = Player(gl=scene)
@@ -608,74 +653,94 @@ scene.player = player
 
 scene.deathScreen = death_screen
 scene.initScene()
+logging.debug("Scene initialization complete")
+# Touch mode is created after initScene() so player.inventory exists.  Pyglet
+# exposes no raw finger events on Windows, so F10 or TOUCH_MODE enables it.
+scene.touchControls = TouchControls(
+    scene, player,
+    is_gameplay=lambda: not PAUSE and not IN_MENU,
+    pause_callback=pause,
+)
+host.touch_controls = scene.touchControls
 ModLoader = mod_loader.ModLoader(gl=scene, sound=sound, settings=settings, player=player, gui=gui, gc=gc)
 scene.mod_loader = ModLoader
 ModLoader.load_pre_init()
 logging.info("setting player: happyleibniz")
-logging.info("Loading sounds...")
-sound.BLOCKS_SOUND["pickUp"] = pygame.mixer.Sound("sounds/pick.mp3")
+logging.info("Setting up sound tables...")
 
-print("Loading step sounds...")
+# Audio is disabled in this build: the target environment blocks audio.  The
+# tables below are still populated so the block/damage logic in BlockSound
+# keeps its normal code paths and random selection, but every entry is a silent
+# no-op -- no file is opened, decoded or verified, and pyglet.media is never
+# imported.
+
+def _list_sound_dir(directory):
+    """List a sound directory, tolerating a build without it."""
+    try:
+        return os.listdir(directory)
+    except (FileNotFoundError, NotADirectoryError):
+        logging.debug("Sound directory missing, skipping: %s", directory)
+        return []
+
+
+def queue_sound(path):
+    return load_sound(path)
+
+
+sound.BLOCKS_SOUND["pickUp"] = queue_sound("sounds/pick.mp3")
+
 sound.BLOCKS_SOUND["step"] = {}
-for e, i in enumerate(os.listdir("sounds/step/")):
+for i in _list_sound_dir("sounds/step"):
     soundName = i.split(".")[0][:-1]
-    soundNum = i.split(".")[0][-1]
     if soundName not in sound.BLOCKS_SOUND["step"]:
         sound.BLOCKS_SOUND["step"][soundName] = []
-    sound.BLOCKS_SOUND["step"][soundName].append(pygame.mixer.Sound("sounds/step/" + i))
-    print("Successful loaded", soundName, "#" + soundNum, "sound!")
+    sound.BLOCKS_SOUND["step"][soundName].append(
+        queue_sound("sounds/step/" + i)
+    )
+logging.debug("Registered %d step sound groups", len(sound.BLOCKS_SOUND["step"]))
 
-print("Loading dig sounds...")
 sound.BLOCKS_SOUND["dig"] = {}
-for e, i in enumerate(os.listdir("sounds/dig/")):
+for i in _list_sound_dir("sounds/dig"):
     soundName = i.split(".")[0][:-1]
-    soundNum = i.split(".")[0][-1]
     if soundName not in sound.BLOCKS_SOUND["dig"]:
         sound.BLOCKS_SOUND["dig"][soundName] = []
-    sound.BLOCKS_SOUND["dig"][soundName].append(pygame.mixer.Sound("sounds/dig/" + i))
-    print("Successful loaded", soundName, "#" + soundNum, "sound!")
+    sound.BLOCKS_SOUND["dig"][soundName].append(queue_sound("sounds/dig/" + i))
+logging.debug("Registered %d dig sound groups", len(sound.BLOCKS_SOUND["dig"]))
 
-print("Loading explode sounds...")
-sound.BLOCKS_SOUND["explode"] = []
-for e, i in enumerate(os.listdir("sounds/explode/")):
-    soundName = i.split(".")[0][:-1]
-    soundNum = i.split(".")[0][-1]
-    sound.BLOCKS_SOUND["explode"].append(pygame.mixer.Sound("sounds/explode/" + i))
-    print("Successful loaded", soundName, "#" + soundNum, "sound!")
+sound.BLOCKS_SOUND["explode"] = [
+    queue_sound("sounds/explode/" + i)
+    for i in _list_sound_dir("sounds/explode")
+]
+logging.debug("Registered %d explode sounds", len(sound.BLOCKS_SOUND["explode"]))
 
-print("Loading damage sounds...")
 sound.SOUNDS["damage"] = {}
-for e, i in enumerate(os.listdir("sounds/damage/")):
+for i in _list_sound_dir("sounds/damage"):
     soundName = i.split(".")[0][:-1]
-    soundNum = i.split(".")[0][-1]
     if soundName not in sound.SOUNDS["damage"]:
         sound.SOUNDS["damage"][soundName] = []
-    sound.SOUNDS["damage"][soundName].append(pygame.mixer.Sound("sounds/damage/" + i))
-    print("Successful loaded", soundName, "#" + soundNum, "sound!")
+    sound.SOUNDS["damage"][soundName].append(queue_sound("sounds/damage/" + i))
+logging.debug("Registered %d damage sound groups", len(sound.SOUNDS["damage"]))
 
-print("Loading GUI sounds...")
 sound.SOUNDS["GUI"] = {}
-for e, i in enumerate(os.listdir("sounds/gui/")):
+for i in _list_sound_dir("sounds/gui"):
     soundName = i.split(".")[0][:-1]
-    soundNum = i.split(".")[0][-1]
     if soundName not in sound.SOUNDS["GUI"]:
         sound.SOUNDS["GUI"][soundName] = []
-    sound.SOUNDS["GUI"][soundName].append(pygame.mixer.Sound("sounds/gui/" + i))
-    print("Successful loaded", soundName, "#" + soundNum, "sound!")
+    sound.SOUNDS["GUI"][soundName].append(queue_sound("sounds/gui/" + i))
+logging.debug("Registered %d GUI sound groups", len(sound.SOUNDS["GUI"]))
 
-print("Loading menu music...")
-for e, i in enumerate(os.listdir("sounds/music/menu")):
+for i in _list_sound_dir("sounds/music/menu"):
     sound.MENU_MUSIC.append("sounds/music/menu/" + i)
-    print("Successful loaded", i, "music!")
-
-print("Loading game music...")
-for e, i in enumerate(os.listdir("sounds/music/game")):
+for i in _list_sound_dir("sounds/music/game"):
     sound.MUSIC.append("sounds/music/game/" + i)
-    print("Successful loaded", i, "music!")
-sound.initMusic(False)
-print("Music loaded successful!")
+logging.debug(
+    "Registered %d menu and %d game music tracks (not loaded: audio disabled)",
+    len(sound.MENU_MUSIC), len(sound.MUSIC),
+)
+logging.debug("Audio disabled in this build; no sound is loaded or played")
 
 print("Loading GUI textures...")
+logging.debug("Loading GUI textures...")
 gui.GUI_TEXTURES = {
     "crafting_table": pyglet.resource.image("gui/crafting_table.png"),
     "inventory_window": pyglet.resource.image("gui/inventory_window.png"),
@@ -732,11 +797,14 @@ zentra.height = 96
 gui.addGuiElement("crosshair", (scene.WIDTH // 2 - 9, scene.HEIGHT // 2 - 9))
 
 player.inventory.initWindow()
+logging.debug("Player inventory window initialized")
 ModLoader.load_remaining()
+logging.debug("Mod loader initialization complete")
 
 showInfoLabel = False
 
 print("Loading splashes...")
+logging.debug("Loading splashes...")
 splfile = open("gui/splashes.txt", "r", errors='replace')
 splash = (splfile.read().split("\n"))
 splash = splash[randint(0, len(splash) - 1)]
@@ -750,7 +818,7 @@ quitButton = Button(scene, translations["quit_game"], 0, 0)
 lang_bb = Button(scene, "", 0, 0, button=gui.GUI_TEXTURES['language'],
                  button_hovered=gui.GUI_TEXTURES['language_hover'])
 singleplayer_button.setEvent(start_new_game)
-quitButton.setEvent(exit)
+quitButton.setEvent(quit_game)
 
 closeSettingsButton = Button(scene, "Close", 0, 0)
 soundVolumeSliderBox = Sliderbox(scene, translations["sound.volume"], 100, 0, 0)
@@ -763,7 +831,7 @@ def process_command(command):
     if command.strip() == "/clear":
         commandEditArea.text = ""
     elif command.strip() == "/exit":
-        exit()
+        quit_game()
 
 commandEditArea.setEvent(process_command)
 closeSettingsButton.setEvent(close_settings)
@@ -777,6 +845,7 @@ respawnButton = Button(scene, translations["respawn"], 0, 0)
 respawnButton.setEvent(respawn)
 
 print("Loading complete!")
+logging.debug("Startup complete; entering the main loop")
 mainMenuRotation = [20, 180]
 mainFunction = draw_main_menu
 
@@ -787,8 +856,144 @@ gc.freeze()
 
 # Delta time variables
 last_time = time.time()
+first_frame_logged = False
 
-while True:
+
+class GameEventHandler:
+    """Recreate the old pygame event-loop order on top of pyglet events."""
+
+    def __init__(self, host):
+        self.host = host
+        self.dt = 0.0
+        self.keys = []
+        self.mbclicked = None
+
+    def begin_frame(self, dt):
+        self.dt = dt
+        self.keys = []
+        self.mbclicked = None
+
+    def on_key_press(self, symbol, modifiers):
+        global fullscreen, WIDTH, HEIGHT, resizeEvent, showInfoLabel
+        self.keys.append(symbol)
+
+        if symbol == key.F11:
+            if not fullscreen:
+                LAST_SAVED_RESOLUTION[:] = [scene.WIDTH, scene.HEIGHT]
+                host.set_fullscreen(True)
+                fullscreen = True
+            else:
+                host.set_fullscreen(False)
+                host.set_size(*LAST_SAVED_RESOLUTION)
+                fullscreen = False
+            WIDTH, HEIGHT = host.size
+            scene.resizeCGL(WIDTH, HEIGHT)
+            resizeEvent = True
+        if symbol == key.F10 and scene.touchControls is not None:
+            scene.touchControls.toggle()
+
+        if IN_MENU:
+            return
+        if not scene.allowEvents["keyboardAndMouse"]:
+            return
+
+        if symbol == key.ESCAPE:
+            pause()
+        if symbol == key.E:
+            player.inventory.showWindow()
+        if symbol == key._1:
+            player.inventory.activeInventory = 0
+        if symbol == key._2:
+            player.inventory.activeInventory = 1
+        if symbol == key._3:
+            player.inventory.activeInventory = 2
+        if symbol == key._4:
+            player.inventory.activeInventory = 3
+        if symbol == key._5:
+            player.inventory.activeInventory = 4
+        if symbol == key._6:
+            player.inventory.activeInventory = 5
+        if symbol == key._7:
+            player.inventory.activeInventory = 6
+        if symbol == key._8:
+            player.inventory.activeInventory = 7
+        if symbol == key._9:
+            player.inventory.activeInventory = 8
+        if symbol == key.F3:
+            showInfoLabel = not showInfoLabel
+        if symbol == key.B and self.host.key_down(key.F3):
+            scene.show_hitboxes = not scene.show_hitboxes
+        if symbol == key.T and not IN_MENU:
+            draw_command_function()
+        if symbol == key.F5:
+            player.cameraType += 1
+            if player.cameraType > 3:
+                player.cameraType = 1
+        if symbol == key.Z:
+            scene.spawn_random_entity()
+        if symbol == key.C:
+            scene.spawn_cow()
+        if symbol == key.V:
+            scene.spawn_sheep()
+        if symbol == key.P:
+            player.is_spectator = not player.is_spectator
+        if symbol == key.L:
+            player.give_debug_items()
+        if symbol == key.Q:
+            player.dropSelectedItem(bool(modifiers & key.MOD_CTRL))
+
+    def on_key_release(self, symbol, modifiers):
+        pass
+
+    def on_mouse_press(self, x, y, button, modifiers):
+        self.mbclicked = button
+        if IN_MENU:
+            return
+        if not scene.allowEvents["keyboardAndMouse"]:
+            return
+        if button in (2, 3):
+            player.mouseEvent(button, self.dt)
+
+    def on_mouse_release(self, x, y, button, modifiers):
+        pass
+
+    def on_mouse_motion(self, x, y, dx, dy):
+        if PAUSE or IN_MENU:
+            return
+        can_look = (scene.allowEvents["keyboardAndMouse"] and
+                    scene.allowEvents["movePlayer"] and
+                    scene.allowEvents["grabMouse"])
+        # Ignore mouse motion while a touch gesture owns the pointer, or the
+        # camera would be rotated twice.
+        touch_motion = (scene.touchControls is not None and
+                        scene.touchControls.blocks_mouse)
+        if can_look and not touch_motion:
+            player.queue_look(dx, dy)
+
+    def on_mouse_scroll(self, x, y, scroll_x, scroll_y):
+        if not scroll_y:
+            return
+        button = 4 if scroll_y > 0 else 5
+        self.mbclicked = button
+        if IN_MENU or not scene.allowEvents["keyboardAndMouse"]:
+            return
+        if button == 4:
+            player.inventory.activeInventory -= 1
+            if player.inventory.activeInventory < 0:
+                player.inventory.activeInventory = 8
+        else:
+            player.inventory.activeInventory += 1
+            if player.inventory.activeInventory > 8:
+                player.inventory.activeInventory = 0
+        slot = player.inventory.inventory[player.inventory.activeInventory]
+        if slot[1]:
+            gui.showText(slot[0])
+
+
+handler = GameEventHandler(host)
+host.event_handler = handler
+
+while not host.closed:
     # Calculate delta time
     current_time = time.time()
     dt = current_time - last_time
@@ -798,117 +1003,59 @@ while True:
         dt = 0.05
 
     pyglet.options['debug_gl'] = False
-    pygame.display.set_caption(f"Minecraft {MC_VERSION} {clock.get_fps()}")
-    mbclicked = None
-    keys = []
+    host.set_caption(f"Minecraft {MC_VERSION} {clock.get_fps()}")
+    handler.begin_frame(dt)
+    host.pump()
+    if host.closed:
+        break
 
-    for event in pygame.event.get():
-        if event.type == pygame.MOUSEMOTION and not PAUSE and not IN_MENU:
-            can_look = (scene.allowEvents["keyboardAndMouse"] and
-                        scene.allowEvents["movePlayer"] and
-                        scene.allowEvents["grabMouse"])
-            center = (scene.WIDTH // 2, scene.HEIGHT // 2)
-            if can_look and event.pos != center:
-                player.queue_look(*event.rel)
-        if event.type == pygame.QUIT:
-            exit()
-        if event.type == pygame.KEYDOWN:
-            keys.append(event.key)
-            if event.key == pygame.K_F11:
-                if not fullscreen:
-                    LAST_SAVED_RESOLUTION = [scene.WIDTH, scene.HEIGHT]
-                    sdl_window.set_fullscreen(desktop=True)
-                    fullscreen = True
-                else:
-                    sdl_window.set_windowed()
-                    sdl_window.size = tuple(LAST_SAVED_RESOLUTION)
-                    fullscreen = False
-                WIDTH, HEIGHT = sdl_window.size
-                scene.resizeCGL(WIDTH, HEIGHT)
-                resizeEvent = True
-        if event.type == pygame.VIDEORESIZE:
-            WIDTH = event.w
-            HEIGHT = event.h
-            scene.resizeCGL(WIDTH, HEIGHT)
-            resizeEvent = True
-        if event.type == pygame.MOUSEBUTTONDOWN:
-            mbclicked = event.button
-        if not IN_MENU:
-            if scene.allowEvents["keyboardAndMouse"]:
-                if event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_ESCAPE:
-                        pause()
-                    if event.key == pygame.K_e:
-                        player.inventory.showWindow()
-                    if event.key == pygame.K_1:
-                        player.inventory.activeInventory = 0
-                    if event.key == pygame.K_2:
-                        player.inventory.activeInventory = 1
-                    if event.key == pygame.K_3:
-                        player.inventory.activeInventory = 2
-                    if event.key == pygame.K_4:
-                        player.inventory.activeInventory = 3
-                    if event.key == pygame.K_5:
-                        player.inventory.activeInventory = 4
-                    if event.key == pygame.K_6:
-                        player.inventory.activeInventory = 5
-                    if event.key == pygame.K_7:
-                        player.inventory.activeInventory = 6
-                    if event.key == pygame.K_8:
-                        player.inventory.activeInventory = 7
-                    if event.key == pygame.K_9:
-                        player.inventory.activeInventory = 8
-                    if event.key == pygame.K_F3:
-                        showInfoLabel = not showInfoLabel
-                    if event.key == pygame.K_b and pygame.key.get_pressed()[pygame.K_F3]:
-                        scene.show_hitboxes = not scene.show_hitboxes
-                    if event.key == pygame.K_t and not IN_MENU:
-                        draw_command_function()
-                    if event.key == pygame.K_F5:
-                        player.cameraType += 1
-                        if player.cameraType > 3:
-                            player.cameraType = 1
-                    if event.key == pygame.K_z:
-                        scene.spawn_random_entity()
-                    if event.key == pygame.K_c:
-                        scene.spawn_cow()
-                    if event.key == pygame.K_v:
-                        scene.spawn_sheep()
-                    if event.key == pygame.K_p:
-                        player.is_spectator = not player.is_spectator
-                    if event.key == pygame.K_l:
-                        player.give_debug_items()
-                    if event.key == pygame.K_q:
-                        player.dropSelectedItem(bool(event.mod & pygame.KMOD_CTRL))
-                if event.type == pygame.MOUSEBUTTONDOWN:
-                    if event.button in (2, 3):
-                        player.mouseEvent(event.button, dt)
-                    if event.button == 4:
-                        player.inventory.activeInventory -= 1
-                        if player.inventory.activeInventory < 0:
-                            player.inventory.activeInventory = 8
-                        if player.inventory.inventory[player.inventory.activeInventory][1]:
-                            gui.showText(player.inventory.inventory[player.inventory.activeInventory][0])
-                    elif event.button == 5:
-                        player.inventory.activeInventory += 1
-                        if player.inventory.activeInventory > 8:
-                            player.inventory.activeInventory = 0
-                        if player.inventory.inventory[player.inventory.activeInventory][1]:
-                            gui.showText(player.inventory.inventory[player.inventory.activeInventory][0])
+    mbclicked = handler.mbclicked
+    keys = handler.keys
 
     gameplay_input = (not PAUSE and not IN_MENU and
                       scene.allowEvents["keyboardAndMouse"] and
                       scene.allowEvents["movePlayer"])
     if gameplay_input:
-        player.mouseEvent(1 if pygame.mouse.get_pressed(3)[0] else -1, dt)
+        mouse_left = bool(host.mouse_buttons[0])
+        touch_controls = scene.touchControls
+        # A touch gesture can leave the left mouse button "pressed" while a
+        # finger drags to look, which would break blocks unintentionally.
+        if touch_controls is not None and touch_controls.blocks_mouse:
+            mouse_left = False
+        touch_break = bool(touch_controls is not None and
+                           touch_controls.break_held)
+        player.mouseEvent(1 if (mouse_left or touch_break) else -1, dt)
 
-    grab_mouse = (gameplay_input and scene.allowEvents["grabMouse"] and
-                  pygame.mouse.get_focused())
-    pygame.event.set_grab(grab_mouse)
-    pygame.mouse.set_visible(not grab_mouse)
+    touch_controls = scene.touchControls
+    touch_mode = bool(touch_controls is not None and touch_controls.enabled)
+    if touch_mode:
+        # Do not grab the cursor: the touchscreen must be able to drive the
+        # modal inventory via the normal mouse path.
+        grab_mouse = False
+    else:
+        grab_mouse = (gameplay_input and scene.allowEvents["grabMouse"] and
+                      host.focused)
+    # set_exclusive_mouse returns the state actually in effect.  If raw input
+    # is unavailable, keep the normal cursor visible and use motion deltas.
+    grab_mouse = host.set_exclusive_mouse(grab_mouse)
+    hide_touch_cursor = (touch_mode and not PAUSE and not IN_MENU and
+                         not (touch_controls is not None and
+                              touch_controls.gui_open))
+    if hide_touch_cursor:
+        host.set_mouse_visible(False)
+    else:
+        host.set_mouse_visible(not grab_mouse)
 
     if IN_MENU:
+        if not first_frame_logged:
+            first_frame_started = time.perf_counter()
         mainFunction(mbclicked)
+        if not first_frame_logged:
+            logging.debug(
+                "First menu frame took %.2f s",
+                time.perf_counter() - first_frame_started,
+            )
+            first_frame_logged = True
 
     if not PAUSE:
         sound.playMusic()
@@ -916,11 +1063,16 @@ while True:
             gui.shows["crosshair"][1] = (scene.WIDTH // 2 - 9, scene.HEIGHT // 2 - 9)
         else:
             gui.shows["crosshair"][1] = (-100, -100)
-        if grab_mouse:
-            pygame.mouse.set_pos((scene.WIDTH // 2, scene.HEIGHT // 2))
+        # pyglet exclusive mouse supplies raw deltas; no recentering is needed.
         scene.updateScene(dt)
         player.inventory.draw()
         gui.update()
+
+        # Draw the touch overlay last so it sits above the 3D world and HUD.
+        # It is positioned away from the hotbar/hearts and hides itself while
+        # the inventory or a mod GUI is open.
+        if scene.touchControls is not None:
+            scene.touchControls.render()
 
         if showInfoLabel:
             drawInfoLabel(scene, f"Minecraft {MC_VERSION} ({MC_VERSION}/vanilla)\n"
@@ -934,7 +1086,7 @@ while True:
                                  f"({scene.worldGen.start})",
                           shadow=False, label_color=(224, 224, 224), xx=scene.WIDTH // 2, yy=scene.HEIGHT // 2,
                           style=[('', '')], size=12, anchor_x='center')
-        pygame.display.flip()
+        host.flip()
         clock.tick(MAX_FPS)
     elif PAUSE and not IN_MENU:
         scene.allowEvents["movePlayer"] = False
@@ -947,3 +1099,8 @@ while True:
         player.inventory.draw()
         gui.update()
         mainFunction(mbclicked)
+
+# Clean shutdown: close audio (a no-op in this build), then destroy the single
+# GL context.
+quit_game()
+

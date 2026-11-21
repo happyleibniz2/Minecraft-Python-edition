@@ -1,8 +1,17 @@
+# pyglet 2.x imports pyglet.window and creates a hidden shadow context when
+# pyglet.gl is imported unless this is disabled first.  The game owns exactly
+# one window/context and must not create a second one.
+import pyglet
+pyglet.options['shadow_window'] = False
+
 import gc
 import math
 import threading
+
+import numpy as np
 import pyglet.image
 from OpenGL.GLU import *
+from OpenGL.error import GLError
 from pyglet.gl import *
 from OpenGL.GL import *
 from functions import *
@@ -15,7 +24,7 @@ from game.world.Clouds import Clouds
 from game.world.DayNightCycle import DayNightCycle
 from game.world.worldGenerator import worldGenerator
 from game.blocks.CubeHandler import CubeHandler
-from game.graphics import DisposableBatch
+from game.graphics import DisposableBatch, FixedFunctionVertexList, draw_vertices
 import logging
 import settings as game_settings
 
@@ -45,6 +54,10 @@ class Scene:
         self.mod_alpha_textures = set()
         self.spawn_egg_items = {}
         self.mod_loader = None
+        # Assigned by minecraft_main_program after the player/inventory exist.
+        # Scene only drives its update; rendering happens after the HUD so the
+        # overlay cannot cover it.
+        self.touchControls = None
         self.show_hitboxes = False
         self._entity_occlusion = {}
         self._occlusion_cursor = 0
@@ -56,6 +69,7 @@ class Scene:
         self.in_water = False
 
         self.resetScene()
+        logging.debug("Scene base state initialized")
 
     def resetScene(self):
         previous_light = getattr(self, "light", None)
@@ -71,21 +85,35 @@ class Scene:
             "keyboardAndMouse": True,
             "showCrosshair": True,
         }
+        if self.touchControls is not None:
+            self.touchControls.reset()
 
         # Cached static sky geometry. Rebuilt lazily on first draw after a
         # world reset, because the star field depends on the fresh DayNightCycle.
         self._sky_vertex_list = None
         self._sky_t_values = ()
+        self._sky_t_np = None
         self._star_vertex_list = None
         self._galaxy_vertex_list = None
+        self._galaxy_intensity = None
+        self._galaxy_blue = None
+        # Tracks whether the current projection is the 3-D one.  ``draw`` is
+        # normally reached right after ``updateScene`` already called
+        # ``set3d``; skipping the duplicate matrix setup saves a handful of
+        # GL calls every frame.
+        self._in_3d = False
 
         self.clouds = Clouds(self)
+        logging.debug("Scene clouds initialized")
         self.droppedBlock = droppedBlock(self)
         self.worldGen = worldGenerator(self, randint(434, 434343454))
+        logging.debug("Scene world generator initialized")
         self.particles = Particles(self)
         self.destroy = DestroyBlock(self)
+        logging.debug("Scene destroy overlay initialized")
         self.light = Light(self)
         self.dayNight = DayNightCycle()
+        logging.debug("Scene lighting and day/night initialized")
 
         self.drawCounter = 0
         self.genTime = 1
@@ -121,10 +149,11 @@ class Scene:
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
         self.panorama = panorama
+        logging.debug("Loaded %d panorama textures", len(panorama))
 
     def vertexList(self):
         x, y, w, h = self.WIDTH / 2, self.HEIGHT / 2, self.WIDTH, self.HEIGHT
-        self.reticle = pyglet.graphics.vertex_list(
+        self.reticle = FixedFunctionVertexList(
             4,
             ('v2f', (x - 10, y, x + 10, y, x, y - 10, x, y + 10)),
             ('c3f', (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))
@@ -149,6 +178,7 @@ class Scene:
         self.setAntialiasing(game_settings.ANTI_ALIASING)
 
         load_textures(self)
+        logging.debug("Scene block textures loaded")
         self.loadPanoramaTextures()
         self.vertexList()
 
@@ -165,13 +195,17 @@ class Scene:
                   | self.mod_alpha_textures),
             self
         )
+        logging.debug("Scene cube handler initialized")
         self.light.initialize()
+        logging.debug("Scene lighting shaders initialized")
 
         self.set3d()
+        logging.debug("Scene OpenGL state initialized")
 
     def set2d(self):
         # UI quads and glyphs share Z=0. Keeping GL_LESS active lets the first
         # background pixel reject every later button/text pixel at equal depth.
+        self._in_3d = False
         glDisable(GL_DEPTH_TEST)
         glDepthMask(GL_FALSE)
         glMatrixMode(GL_PROJECTION)
@@ -181,6 +215,7 @@ class Scene:
         glLoadIdentity()
 
     def set3d(self):
+        self._in_3d = True
         glEnable(GL_DEPTH_TEST)
         glDepthMask(GL_TRUE)
         glDepthFunc(GL_LESS)
@@ -281,6 +316,11 @@ class Scene:
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
         glLoadIdentity()
 
+        # Touch actions are applied before physics so joystick/look input is
+        # consumed by this tick's player update.
+        if self.touchControls is not None:
+            self.touchControls.update(dt)
+
         self.player.update(dt)
 
         self.clouds.update(dt)
@@ -299,7 +339,7 @@ class Scene:
             self.destroy.drawDestroy(*blockByVec[0])
             glPolygonMode(GL_FRONT_AND_BACK, GL_LINE)
             glColor3d(0, 0, 0)
-            pyglet.graphics.draw(24, GL_QUADS, ('v3f/static', flatten(cube_vertices(blockByVec[0], 0.51))))
+            draw_vertices(GL_QUADS, flatten(cube_vertices(blockByVec[0], 0.51)))
             glPolygonMode(GL_FRONT_AND_BACK, GL_FILL)
             glColor3d(1, 1, 1)
             self.lookingAt = f"{blockByVec[0][0]} {blockByVec[0][1]} {blockByVec[0][2]} " \
@@ -318,7 +358,8 @@ class Scene:
             i()
 
     def draw(self, dt=0.0):
-        self.set3d()
+        if not getattr(self, "_in_3d", False):
+            self.set3d()
         glLoadIdentity()
         self.player.updateView()
 
@@ -338,7 +379,7 @@ class Scene:
 
             try:
                 self.stuffBatch.draw()
-            except pyglet.gl.lib.GLException:
+            except (pyglet.gl.lib.GLException, GLError):
                 logging.exception("GL batch draw failed while rendering scene")
             if self.mod_loader is not None:
                 self.mod_loader.post("render_world", scene=self, dt=dt)
@@ -406,7 +447,8 @@ class Scene:
                 t_values += (t0, t1, t0)
         count = len(vertices) // 3
         self._sky_t_values = t_values
-        self._sky_vertex_list = pyglet.graphics.vertex_list(
+        self._sky_t_np = np.asarray(t_values, dtype=np.float32)
+        self._sky_vertex_list = FixedFunctionVertexList(
             count,
             ('v3f/static', tuple(vertices)),
             ('c3f/dynamic', tuple([0.0] * (count * 3))),
@@ -423,7 +465,7 @@ class Scene:
         for sx, sy, sz in stars:
             star_vs += (sx * radius, sy * radius, sz * radius)
             star_cs += (1.0, 1.0, 1.0, 1.0)
-        self._star_vertex_list = pyglet.graphics.vertex_list(
+        self._star_vertex_list = FixedFunctionVertexList(
             len(stars),
             ('v3f/static', tuple(star_vs)),
             ('c4f/dynamic', tuple(star_cs)),
@@ -434,11 +476,18 @@ class Scene:
             galaxy_vs += (sx * radius, sy * radius, sz * radius)
             galaxy_cs += (0.72 * intensity, 0.78 * intensity,
                           blue * intensity, intensity)
-        self._galaxy_vertex_list = pyglet.graphics.vertex_list(
+        self._galaxy_vertex_list = FixedFunctionVertexList(
             len(galaxy),
             ('v3f/static', tuple(galaxy_vs)),
             ('c4f/dynamic', tuple(galaxy_cs)),
         )
+        # Keep the per-star modulation factors around so the night-sky color
+        # pass is a couple of NumPy multiplies instead of a Python loop over
+        # 420 stars every frame.
+        self._galaxy_intensity = np.asarray(
+            [star[3] for star in galaxy], dtype=np.float32)
+        self._galaxy_blue = np.asarray(
+            [star[4] for star in galaxy], dtype=np.float32)
 
     def drawCelestialSky(self):
         """Draw the moving sun, moon and night stars behind the world."""
@@ -464,15 +513,21 @@ class Scene:
                 glTranslatef(px, py, pz)
                 self._star_vertex_list.draw(GL_POINTS)
 
-                galaxy_colors = []
-                for _, _, _, intensity, blue in self.dayNight.galaxy_stars:
-                    a = brightness * intensity
-                    galaxy_colors.extend((a * 0.72, a * 0.78, a * blue, a))
-                self._galaxy_vertex_list.colors = tuple(galaxy_colors)
+                galaxy_colors = np.empty((self._galaxy_intensity.size, 4),
+                                         dtype=np.float32)
+                alpha = brightness * self._galaxy_intensity
+                galaxy_colors[:, 0] = alpha * 0.72
+                galaxy_colors[:, 1] = alpha * 0.78
+                galaxy_colors[:, 2] = alpha * self._galaxy_blue
+                galaxy_colors[:, 3] = alpha
+                self._galaxy_vertex_list.colors = galaxy_colors.ravel().tolist()
                 glPointSize(1.2)
                 self._galaxy_vertex_list.draw(GL_POINTS)
                 glPopMatrix()
 
+            # TextureGroup binds on unit 0; select it before enabling the
+            # target in case the lighting pass left another unit active.
+            glActiveTexture(GL_TEXTURE0)
             glEnable(GL_TEXTURE_2D)
             glEnable(GL_BLEND)
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
@@ -508,11 +563,12 @@ class Scene:
         zenith = self.dayNight.zenith_color
         hr, hg, hb = horizon
         dr, dg, db = zenith[0] - hr, zenith[1] - hg, zenith[2] - hb
-        self._sky_vertex_list.colors = tuple(
-            component
-            for t in self._sky_t_values
-            for component in (hr + dr * t, hg + dg * t, hb + db * t)
-        )
+        t = self._sky_t_np
+        colors = np.empty((t.size, 3), dtype=np.float32)
+        colors[:, 0] = hr + dr * t
+        colors[:, 1] = hg + dg * t
+        colors[:, 2] = hb + db * t
+        self._sky_vertex_list.colors = colors.ravel().tolist()
 
         px, py, pz = self.player.position
         glPushAttrib(GL_ENABLE_BIT | GL_DEPTH_BUFFER_BIT | GL_CURRENT_BIT)
@@ -553,6 +609,11 @@ class Scene:
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
             glDepthMask(GL_FALSE)
             glColor4f(color[0] / 255, color[1] / 255, color[2] / 255, 0.45)
+            # pyglet 2.x TextureGroup only binds; keep the target enabled for
+            # this immediate-mode overlay.  TextureGroup selects unit 0, so
+            # select it before enabling the target.
+            glActiveTexture(GL_TEXTURE0)
+            glEnable(GL_TEXTURE_2D)
             texture_group.set_state_recursive()
             glBegin(GL_QUADS)
             glTexCoord2f(0, 0); glVertex2f(0, 0)

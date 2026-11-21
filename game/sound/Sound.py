@@ -1,7 +1,7 @@
 from random import randint
 
-import pygame
 import settings
+from game.sound.audio import MusicPlayer
 
 
 class Sound:
@@ -12,40 +12,24 @@ class Sound:
         self.MUSIC = []
         self.MENU_MUSIC = []
         self.music_already_playing = False
-
-        self.musicPlayer = pygame.mixer.music
-
+        # Audio is disabled in this build: MusicPlayer is a no-op stub that
+        # creates no pyglet.media player and never touches a decoder.
+        self.musicPlayer = MusicPlayer()
         self.volume = settings.SOUND_VOLUME
 
     def initMusic(self, t):
-        self.musicPlayer.stop()
-        del self.musicPlayer
-        self.musicPlayer = pygame.mixer.music
+        """Disabled.  No track is loaded or queued (no audio in this build)."""
+        return
 
-        if t:
-            musicNum = randint(0, len(self.MUSIC) - 1)
-            self.musicPlayer.load(self.MUSIC[musicNum])
-            for i in range(len(self.MUSIC)):
-                if i == musicNum:
-                    continue
-                self.musicPlayer.queue(self.MUSIC[i])
-        else:
-            musicNum = randint(0, len(self.MENU_MUSIC) - 1)
-            self.musicPlayer.load(self.MENU_MUSIC[musicNum])
-            for i in range(len(self.MENU_MUSIC)):
-                if i == musicNum:
-                    continue
-                self.musicPlayer.queue(self.MENU_MUSIC[i])
+    def shutdown(self):
+        self.musicPlayer.close()
 
     @staticmethod
     def _play(sound, volume):
-        """Play a sound, tolerating pygame returning no free channel."""
+        """Play a sound, tolerating the mixer returning no free channel."""
         if sound is None:
             return None
-        channel = sound.play()
-        if channel is not None:
-            channel.set_volume(volume)
-        return channel
+        return sound.play()
 
     def playSound(self, name, volume):
         return self._play(self.SOUNDS.get(name), volume)
@@ -58,9 +42,5 @@ class Sound:
         return None
 
     def playMusic(self):
-        if self.music_already_playing:
-            return
-        if randint(0, 5000) == 746:
-            self.music_already_playing = True
-            self.musicPlayer.play()
-            self.musicPlayer.set_volume(self.volume)
+        """Disabled.  Menu/game music is never played in this build."""
+        return None

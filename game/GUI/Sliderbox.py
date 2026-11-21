@@ -25,17 +25,20 @@ class Sliderbox:
             pos = self.bg.width - self.slider.width
         self.slider.x = self.x + pos
 
+        host = getattr(self.gl, "host", None)
+        left_down = bool(host is not None and host.mouse_buttons[0])
+
         if checkHover(self.x, self.y,
                       self.bg.width, self.bg.height,
                       mp[0], mp[1]):
-            if pygame.mouse.get_pressed(3)[0]:
+            if left_down:
                 self.val = round((mp[0] - self.x) * self.maxval / self.bg.width)
                 pos = mp[0]
                 if pos > self.x + self.bg.width - self.slider.width:
                     pos = self.x + self.bg.width - self.slider.width
                 self.slider.x = pos
                 self.lastButtonClicked = True
-        if self.lastButtonClicked and not pygame.mouse.get_pressed(3)[0]:
+        if self.lastButtonClicked and not left_down:
             self.gl.sound.playGuiSound("click")
             if self.event is not None:
                 self.event(self.val)

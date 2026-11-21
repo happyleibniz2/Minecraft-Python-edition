@@ -11,7 +11,11 @@ Colours are Minecraft's official spawn egg values.
 
 import os
 
+# Must run before pyglet.gl/pyglet.window/pyglet.image are imported: pyglet 2.x
+# otherwise creates a hidden 1x1 shadow window and a second GL context, and
+# the game must own exactly one window/context.
 import pyglet
+pyglet.options['shadow_window'] = False
 from OpenGL.GL import *
 
 # entity id -> (primary colour, secondary colour), from Minecraft

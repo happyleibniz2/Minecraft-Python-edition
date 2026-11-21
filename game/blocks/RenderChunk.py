@@ -253,24 +253,30 @@ class RenderChunk:
                 (builder["color_format"] + '/static', tuple(builder["colors"])),
             ]
             if builder["sway_format"] is not None:
-                # Pyglet 1.5 duplicates static generic attributes internally;
-                # keep this small shader-only array in its dynamic VBO.
+                # The lighting shader reads this generic attribute directly;
+                # the fixed-function batch binds it with glVertexAttribPointer.
                 attributes.append((builder["sway_format"], tuple(builder["sway"])))
             builder["batch"].add(count, GL_QUADS, builder["texture"], *attributes)
             self.vertex_count += count
 
     def render_opaque(self):
-        self.batch.draw()
+        if self.batch.vertex_lists:
+            self.batch.draw()
 
     def render_cutout(self):
-        self.cutout_batch.draw()
+        if self.cutout_batch.vertex_lists:
+            self.cutout_batch.draw()
 
     def render_shadow(self):
-        self.batch.draw()
-        self.cutout_batch.draw()
+        if self.batch.vertex_lists:
+            self.batch.draw()
+        if self.cutout_batch.vertex_lists:
+            self.cutout_batch.draw()
 
     def render_overlay(self):
-        self.overlay_batch.draw()
+        if self.overlay_batch.vertex_lists:
+            self.overlay_batch.draw()
 
     def render_water(self):
-        self.water_batch.draw()
+        if self.water_batch.vertex_lists:
+            self.water_batch.draw()

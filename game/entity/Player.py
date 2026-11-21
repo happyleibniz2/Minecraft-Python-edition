@@ -1,6 +1,12 @@
 import math
 from random import randint
+
+# Must run before pyglet.window is imported: pyglet 2.x otherwise creates a
+# hidden 1x1 shadow window and a second GL context, and the game must own
+# exactly one window/context.
 import pyglet
+pyglet.options['shadow_window'] = False
+from pyglet.window import key
 from OpenGL.GL import *
 from game.blocks.BlockEvent import *
 from functions import roundPos
@@ -39,6 +45,10 @@ class Player:
         self.mouse_sensitivity = MOUSE_SENSITIVITY
         self._mouse_dx = 0.0
         self._mouse_dy = 0.0
+        # Optional analog input supplied by game.TouchControls. It is read in
+        # addition to the keyboard so touch controls do not need to fake the
+        # polled key state maintained by game.host.PygletHost.
+        self.touch_input = None
         self.attack_cooldown = 999.0
         self.hurt_cooldown = 0.0
         self.last_damage = 0.0
@@ -74,6 +84,9 @@ class Player:
         self.is_sprinting = False
         self._mouse_dx = 0.0
         self._mouse_dy = 0.0
+        touch_input = getattr(self, "touch_input", None)
+        if touch_input is not None and hasattr(touch_input, "reset"):
+            touch_input.reset()
         self.attack_cooldown = 999.0
         self.hurt_cooldown = 0.0
         self.last_damage = 0.0
@@ -137,17 +150,28 @@ class Player:
             return
 
         self._apply_mouse_look()
-        key = pygame.key.get_pressed()
+        host = getattr(self.gl, "host", None)
+        keys_down = host.keys_down if host is not None else ()
+        touch = getattr(self, "touch_input", None)
         self.in_water = self._is_in_water()
-        forward = int(key[pygame.K_w]) - int(key[pygame.K_s])
-        strafe = int(key[pygame.K_d]) - int(key[pygame.K_a])
+        forward = int(key.W in keys_down) - int(key.S in keys_down)
+        strafe = int(key.D in keys_down) - int(key.A in keys_down)
+        if touch is not None:
+            forward += touch.forward
+            strafe += touch.strafe
         input_length = math.hypot(forward, strafe)
-        if input_length:
+        if input_length > 1.0:
+            # Normalise keyboard diagonals, but preserve analog joystick
+            # magnitudes below 1.0 so walking slowly is possible.
             forward /= input_length
             strafe /= input_length
 
-        sneaking = key[pygame.K_LSHIFT] and not self.is_spectator and not self.in_water
-        sprinting = key[pygame.K_LCTRL] and forward > 0 and not sneaking
+        jump_held = key.SPACE in keys_down or (touch is not None and touch.jump)
+        sneak_held = key.LSHIFT in keys_down or (touch is not None and touch.sneak)
+        sprint_held = key.LCTRL in keys_down or (touch is not None and touch.sprint)
+
+        sneaking = sneak_held and not self.is_spectator and not self.in_water
+        sprinting = sprint_held and forward > 0 and not sneaking
         move_speed = self.speed
         if sprinting:
             move_speed *= self.SPRINT_MULTIPLIER
@@ -195,7 +219,7 @@ class Player:
         dz = self.velocity_z * dt
 
         if self.is_spectator:
-            vertical = int(key[pygame.K_SPACE]) - int(key[pygame.K_LSHIFT])
+            vertical = int(jump_held) - int(sneak_held)
             self.position = [
                 self.position[0],
                 self.position[1] + vertical * self.speed * dt,
@@ -213,11 +237,11 @@ class Player:
         else:
             self.setShift(sneaking, dt)
             if self.in_water:
-                if key[pygame.K_SPACE]:
+                if jump_held:
                     self.dy = min(2.4, self.dy + 8 * dt)
-                if key[pygame.K_LSHIFT]:
+                if sneak_held:
                     self.dy = max(-2.4, self.dy - 8 * dt)
-            elif key[pygame.K_SPACE]:
+            elif jump_held:
                 self.jump()
 
         start_x = self.position[0]

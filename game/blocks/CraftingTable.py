@@ -1,8 +1,13 @@
+# Must run before pyglet.text/pyglet.gl are imported (directly or via the
+# modules below): pyglet 2.x otherwise creates a hidden 1x1 shadow window and
+# a second GL context, and the game must own exactly one window/context.
+import pyglet
+pyglet.options['shadow_window'] = False
+
 from game.GUI.ModalWindow import ModalWindow
 from game.crafting import getCraftingItem
 from game.SlotMechanics import MAX_STACK, is_empty, left_click, right_click
 from settings import *
-import pyglet
 
 
 class CraftingTable:

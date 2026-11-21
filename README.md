@@ -4,7 +4,7 @@
 ![Python](https://img.shields.io/badge/python-%233670A0.svg?style=for-the-badge&logo=python&logoColor=ffdd54)
 ![NumPy](https://img.shields.io/badge/numpy-%23013243.svg?style=for-the-badge&logo=numpy&logoColor=white)
 ![OpenGL](https://img.shields.io/badge/opengl-%235586A4.svg?style=for-the-badge&logo=opengl&logoColor=white) 
-### Minecraft Python Edition is a Minecraft-inspired voxel game written in Python, using Pygame, PyOpenGL, Pyglet, and NumPy. The project focuses on experimenting with voxel rendering, procedural terrain generation, game physics, entities, and Minecraft-style gameplay systems.
+### Minecraft Python Edition is a Minecraft-inspired voxel game written in Python, using Pyglet, PyOpenGL, and NumPy. The project focuses on experimenting with voxel rendering, procedural terrain generation, game physics, entities, and Minecraft-style gameplay systems.
 
 ## ✨Features
 - Dirty chunk loading
@@ -198,11 +198,9 @@ The project is actively being optimized, with a focus on:
 
 ```pyopengl==3.1.5```
 
-```pyglet==1.5.28```
+```pyglet==2.1.19```
 
-```numpy==1.19.3```
-
-```pygame==2.0.1```
+```numpy>=1.22```
 
 ## 🚀 Installation
 
@@ -221,7 +219,7 @@ pip install -r requirements.txt
 Or install them manually:
 
 ```bash
-pip install pyopengl==3.1.5 pyglet==1.5.28 numpy==1.19.3 pygame==2.0.1
+pip install pyopengl==3.1.5 pyglet==2.1.19 "numpy>=1.22"
 ```
 
 ### Running the Game

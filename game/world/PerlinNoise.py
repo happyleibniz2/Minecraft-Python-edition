@@ -2,6 +2,8 @@ import random
 import math
 import threading
 
+import numpy as np
+
 
 class PerlinNoise(threading.Thread):
     def __call__(self, x, y):
@@ -48,6 +50,11 @@ class PerlinNoise(threading.Thread):
         self._cache = {}
         self._cache_limit = 1 << 16
 
+        # NumPy mirror of the permutation table.  Keeping this around means a
+        # batched terrain pass only pays the list -> ndarray conversion once,
+        # instead of once per noise field.
+        self._p_np = np.asarray(self.p, dtype=np.int64)
+
     def updateAvg(self, mh):
         self.avg = mh * len(self.pp) / sum(f + i for f, i in self.pp)
         self._cache.clear()
@@ -91,6 +98,101 @@ class PerlinNoise(threading.Thread):
         lower = (a + u * (b - a))
         upper = (c + u * (d - c))
         return lower + v * (upper - lower)
+
+    @staticmethod
+    def _grad_many(h, x, y, z):
+        """Vectorised version of :meth:`grad` (same branchless formula)."""
+        h = h & 15
+        u = np.where(h & 8, y, x)
+        v = np.where(h & 12, np.where((h == 12) | (h == 14), x, z), y)
+        return np.where(h & 1, u, -u) + np.where(h & 2, v, -v)
+
+    def noise2d_many(self, x, y):
+        """Evaluate :meth:`noise2d` for NumPy arrays in one pass.
+
+        The maths is intentionally identical to the scalar implementation;
+        only the Python loop is replaced with array operations.  This is the
+        hot path used by chunk generation.
+        """
+        x = np.asarray(x, dtype=np.float64)
+        y = np.asarray(y, dtype=np.float64)
+        p = self._p_np
+        m = self.m
+
+        xf = np.floor(x)
+        yf = np.floor(y)
+        X = xf.astype(np.int64) % m
+        Y = yf.astype(np.int64) % m
+        x = x - xf
+        y = y - yf
+
+        u = x * x * x * (x * (x * 6 - 15) + 10)
+        v = y * y * y * (y * (y * 6 - 15) + 10)
+
+        A = p[X] + Y
+        B = p[X + 1] + Y
+        AA = p[A]
+        AB = p[A + 1]
+        BA = p[B]
+        BB = p[B + 1]
+
+        x1 = x - 1
+        y1 = y - 1
+        a = self._grad_many(p[AA], x, y, 0.0)
+        b = self._grad_many(p[BA], x1, y, 0.0)
+        c = self._grad_many(p[AB], x, y1, 0.0)
+        d = self._grad_many(p[BB], x1, y1, 0.0)
+        lower = a + u * (b - a)
+        upper = c + u * (d - c)
+        return lower + v * (upper - lower)
+
+    def noise_many(self, x, y, z):
+        """Evaluate the full 3-D :meth:`noise` for NumPy arrays."""
+        x = np.asarray(x, dtype=np.float64)
+        y = np.asarray(y, dtype=np.float64)
+        z = np.asarray(z, dtype=np.float64)
+        p = self._p_np
+        m = self.m
+
+        xf = np.floor(x)
+        yf = np.floor(y)
+        zf = np.floor(z)
+        X = xf.astype(np.int64) % m
+        Y = yf.astype(np.int64) % m
+        Z = zf.astype(np.int64) % m
+        x = x - xf
+        y = y - yf
+        z = z - zf
+
+        u = x * x * x * (x * (x * 6 - 15) + 10)
+        v = y * y * y * (y * (y * 6 - 15) + 10)
+        w = z * z * z * (z * (z * 6 - 15) + 10)
+
+        A = p[X] + Y
+        AA = p[A] + Z
+        AB = p[A + 1] + Z
+        B = p[X + 1] + Y
+        BA = p[B] + Z
+        BB = p[B + 1] + Z
+
+        x1, y1, z1 = x - 1, y - 1, z - 1
+        grad = self._grad_many
+        a = grad(p[AA], x, y, z)
+        b = grad(p[BA], x1, y, z)
+        c = grad(p[AB], x, y1, z)
+        d = grad(p[BB], x1, y1, z)
+        e = grad(p[AA + 1], x, y, z1)
+        f = grad(p[BA + 1], x1, y, z1)
+        g = grad(p[AB + 1], x, y1, z1)
+        h = grad(p[BB + 1], x1, y1, z1)
+
+        lower_y = a + u * (b - a)
+        upper_y = c + u * (d - c)
+        lower = lower_y + v * (upper_y - lower_y)
+        lower_y = e + u * (f - e)
+        upper_y = g + u * (h - g)
+        upper = lower_y + v * (upper_y - lower_y)
+        return lower + w * (upper - lower)
 
     def fade(self, t): return t * t * t * (t * (t * 6 - 15) + 10)
 
